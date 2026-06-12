@@ -1,0 +1,11 @@
+default_context:
+  project_name: "s1iw_catalogue"
+  project_description: "Catalogue exhaustif des produits Sentinel-1 IW pour Ifremer."
+  organization: "lops-wave"
+  license: "MIT"
+  minimal_python_version: 3.11
+  github_name: "agrouaze"
+  email: "antoine.grouazel@ifremer.fr"
+  version: "2026.6.12"
+  line_length: "88"
+  create_example_template: "none"
