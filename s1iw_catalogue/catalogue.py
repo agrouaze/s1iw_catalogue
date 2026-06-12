@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
-from pathlib import Path
 from typing import Optional, Union
+
+from pathlib import Path
 
 import polars as pl
 
@@ -16,25 +17,30 @@ class S1IWCatalogue:
 
     def __init__(
         self,
-        catalogue_path: Union[str, Path],
-        config: Optional[Union[str, Path, dict]] = None,
+        catalogue_path: str | Path,
+        config: str | Path | dict | None = None,
     ) -> None:
         self._catalogue_path = Path(catalogue_path)
         self._config = load_config() if config is None else config
 
-    def create(self, output_path: Optional[Union[str, Path]] = None) -> None:
+    def create(self, output_path: str | Path | None = None) -> None:
         pass
 
     def update(self, force_meteo_refresh: bool = False) -> None:
         pass
 
-    def stats(self, dataset: Optional[str] = None, verbose: bool = False, output: Optional[Union[str, Path]] = None) -> dict:
+    def stats(
+        self,
+        dataset: str | None = None,
+        verbose: bool = False,
+        output: str | Path | None = None,
+    ) -> dict:
         return {}
 
-    def backup(self, backup_dir: Optional[Union[str, Path]] = None) -> Path:
+    def backup(self, backup_dir: str | Path | None = None) -> Path:
         return Path()
 
-    def query(self, safe_name: str) -> Optional[dict]:
+    def query(self, safe_name: str) -> dict | None:
         return None
 
     def get_centroids(self) -> pl.DataFrame:

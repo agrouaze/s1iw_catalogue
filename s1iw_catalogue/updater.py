@@ -1,7 +1,8 @@
 """Incremental update logic for the catalogue."""
 
-from pathlib import Path
 from typing import List, Optional
+
+from pathlib import Path
 
 import polars as pl
 
@@ -43,5 +44,5 @@ class CatalogueUpdater:
     def _get_safe_centroid(self, polygon_wkt: str) -> tuple[float, float]:
         return (0.0, 0.0)
 
-    def _call_cdse_match(self, safe_name: str) -> List[str]:
+    def _call_cdse_match(self, safe_name: str) -> list[str]:
         return []

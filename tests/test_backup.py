@@ -1,7 +1,7 @@
 """Test backup management."""
 
-from pathlib import Path
 import time
+from pathlib import Path
 
 import pytest
 
@@ -31,6 +31,7 @@ def test_list_backups(dummy_catalogue, tmp_path):
     backup = CatalogueBackup(dummy_catalogue, backup_dir, keep_last=2)
     b1 = backup.create_backup()
     import time
+
     time.sleep(0.01)  # small delay to ensure different microsecond
     b2 = backup.create_backup()
     backups = backup.list_backups()

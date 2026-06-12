@@ -4,8 +4,7 @@ from typing import Dict, List
 
 import polars as pl
 
-
-SCHEMA: Dict[str, pl.DataType] = {
+SCHEMA: dict[str, pl.DataType] = {
     "SAFE SLC": pl.Utf8,
     "SAFE GRD": pl.Utf8,
     "SAFE OCN": pl.Utf8,

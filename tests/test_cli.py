@@ -45,5 +45,8 @@ def test_query_command():
     runner = CliRunner()
     with runner.isolated_filesystem():
         Path("dummy.parquet").touch()
-        result = runner.invoke(main, ["query", "--catalogue", "dummy.parquet", "--safe-name", "S1A_IW_SLC_..."])
+        result = runner.invoke(
+            main,
+            ["query", "--catalogue", "dummy.parquet", "--safe-name", "S1A_IW_SLC_..."],
+        )
         assert result.exit_code == 0 or result.exit_code != 0

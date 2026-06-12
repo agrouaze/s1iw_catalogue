@@ -1,12 +1,13 @@
 """Test CatalogueStats methods with dummy data."""
 
+import datetime
+
 import polars as pl
 import pytest
 
-from s1iw_catalogue.stats import CatalogueStats
 from s1iw_catalogue.schema import create_empty_catalogue
+from s1iw_catalogue.stats import CatalogueStats
 
-import datetime
 
 @pytest.fixture
 def sample_df():
@@ -76,7 +77,9 @@ def test_latest_horodating(sample_df):
 
 def test_stale_rows(sample_df):
     stats = CatalogueStats(sample_df)
-    stale = stats.stale_rows(days_threshold=0)  # all rows older than 0 days? our dates are in 2025, "now" is later
+    stale = stats.stale_rows(
+        days_threshold=0
+    )  # all rows older than 0 days? our dates are in 2025, "now" is later
     # Since we cannot mock time easily, we can skip or use fixed threshold large enough
     # For simplicity, just check method exists and returns DataFrame
     assert isinstance(stale, pl.DataFrame)

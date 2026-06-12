@@ -1,12 +1,13 @@
 """Configuration management for s1iw_catalogue."""
 
-from pathlib import Path
 from typing import Any, Dict, Optional, Union
+
+from pathlib import Path
 
 import yaml
 
 
-def get_default_config() -> Dict[str, Any]:
+def get_default_config() -> dict[str, Any]:
     """Return built-in default configuration values."""
     return {
         "paths": {
@@ -21,11 +22,18 @@ def get_default_config() -> Dict[str, Any]:
             },
         },
         "sources": {
-            "cdse": {"api_url": "https://dataspace.copernicus.eu", "timeout_seconds": 300, "max_retries": 3},
+            "cdse": {
+                "api_url": "https://dataspace.copernicus.eu",
+                "timeout_seconds": 300,
+                "max_retries": 3,
+            },
             "s1ifr": {"endpoint": "https://ifremer-s1ifr.internal/api"},
             "familyprod": {"database_path": "/shared/familyprod/products.db"},
         },
-        "enrichment": {"ecmwf": {"enabled": True, "grid_resolution": 0.1}, "ww3": {"enabled": False}},
+        "enrichment": {
+            "ecmwf": {"enabled": True, "grid_resolution": 0.1},
+            "ww3": {"enabled": False},
+        },
         "update_rules": {"force_meteo_refresh": False, "incremental_only": True},
         "backup": {"keep_last": 7, "compression": "snappy"},
         "logging": {"level": "INFO", "file": "/var/log/s1iw_catalogue.log"},
@@ -33,9 +41,9 @@ def get_default_config() -> Dict[str, Any]:
 
 
 def load_config(
-    config_path: Optional[Union[str, Path]] = None,
-    cli_overrides: Optional[Dict[str, Any]] = None,
-) -> Dict[str, Any]:
+    config_path: str | Path | None = None,
+    cli_overrides: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     """Load configuration from defaults, versioned file, local file, and CLI."""
     cfg = get_default_config()
 
@@ -56,15 +64,15 @@ def load_config(
     return cfg
 
 
-def _load_yaml(path: Path) -> Dict[str, Any]:
+def _load_yaml(path: Path) -> dict[str, Any]:
     """Load YAML file, return empty dict if not found."""
     if not path.exists():
         return {}
-    with open(path, "r") as f:
+    with open(path) as f:
         return yaml.safe_load(f) or {}
 
 
-def _deep_merge(base: Dict[str, Any], override: Dict[str, Any]) -> Dict[str, Any]:
+def _deep_merge(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]:
     """Recursively merge two dictionaries."""
     result = base.copy()
     for key, value in override.items():
@@ -77,4 +85,5 @@ def _deep_merge(base: Dict[str, Any], override: Dict[str, Any]) -> Dict[str, Any
 
 class S1IWCatalogueConfig(dict):
     """Typed configuration dictionary (placeholder)."""
+
     pass

@@ -40,7 +40,9 @@ def test_load_config_with_versioned_file(tmp_path):
 def test_load_config_with_local_override(tmp_path):
     """localconfig.yml should override versioned."""
     versioned = tmp_path / "config.yml"
-    versioned.write_text(yaml.dump({"paths": {"output": {"catalogue": "/versioned.parquet"}}}))
+    versioned.write_text(
+        yaml.dump({"paths": {"output": {"catalogue": "/versioned.parquet"}}})
+    )
     local = tmp_path / "localconfig.yml"
     local.write_text(yaml.dump({"paths": {"output": {"catalogue": "/local.parquet"}}}))
 
@@ -53,7 +55,9 @@ def test_load_config_with_local_override(tmp_path):
 def test_load_config_with_cli_overrides(tmp_path):
     """CLI overrides should have highest priority."""
     versioned = tmp_path / "config.yml"
-    versioned.write_text(yaml.dump({"paths": {"output": {"catalogue": "/versioned.parquet"}}}))
+    versioned.write_text(
+        yaml.dump({"paths": {"output": {"catalogue": "/versioned.parquet"}}})
+    )
     cli = {"paths": {"output": {"catalogue": "/cli.parquet"}}}
 
     with pytest.MonkeyPatch.context() as mp:
