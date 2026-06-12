@@ -1,36 +1,70 @@
 default_language_version:
-  python: python3.9
+  python: python3.11
 
 default_stages: [commit, push]
 
 repos:
   - repo: https://github.com/pre-commit/pre-commit-hooks
-    rev: v2.5.0
+    rev: v4.5.0  # updated to a more recent stable version
     hooks:
       - id: check-yaml
       - id: end-of-file-fixer
         exclude: LICENSE
+      - id: trailing-whitespace
+      - id: check-added-large-files
+      - id: check-merge-conflict
 
   - repo: local
     hooks:
       - id: pyupgrade
         name: pyupgrade
-        entry: poetry run pyupgrade --py39-plus
+        entry: pyupgrade --py311-plus
         types: [python]
         language: system
+        pass_filenames: true
 
   - repo: local
     hooks:
       - id: isort
         name: isort
-        entry: poetry run isort --settings-path pyproject.toml
+        entry: isort --settings-path pyproject.toml
         types: [python]
         language: system
+        pass_filenames: true
 
   - repo: local
     hooks:
       - id: black
         name: black
-        entry: poetry run black --config pyproject.toml
+        entry: black --config pyproject.toml
         types: [python]
         language: system
+        pass_filenames: true
+
+  - repo: local
+    hooks:
+      - id: mypy
+        name: mypy
+        entry: mypy --config-file pyproject.toml
+        types: [python]
+        language: system
+        pass_filenames: true
+        require_serial: true
+
+  - repo: local
+    hooks:
+      - id: darglint
+        name: darglint
+        entry: darglint --verbosity 2
+        types: [python]
+        language: system
+        pass_filenames: true
+
+  - repo: local
+    hooks:
+      - id: pylint
+        name: pylint
+        entry: pylint
+        types: [python]
+        language: system
+        pass_filenames: true
