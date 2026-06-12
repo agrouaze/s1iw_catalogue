@@ -37,7 +37,7 @@ Build and maintain a single **Parquet** file that centralises, for each SAFE (Se
 | `polarization` | string | One of: `SDV`, `SSV`, `SDH`, `SSH` (Ifremer internal convention) |
 | `unité` | string | Satellite identifier: `S1A`, `S1B`, `S1C`, `S1D` |
 
-> **Note**: 
+> **Note**:
 > - One row corresponds to **a single unique SAFE** identified by one of the three fields `SAFE SLC`, `SAFE GRD` or `SAFE OCN` (the two others remain empty).
 > - The `horodating` column tracks when the row was last modified, enabling incremental updates and monitoring of catalogue freshness.
 > - The file is time‑partitioned by acquisition year/month to optimise queries.
@@ -220,7 +220,7 @@ def load_config(config_path=None):
     versioned = load_yaml("config.yml") if exists else {}
     local = load_yaml("localconfig.yml") if exists else {}
     cli_overrides = parse_cli_args()
-    
+
     # Merge with priority: cli > local > versioned > defaults
     config = deep_merge(defaults, versioned)
     config = deep_merge(config, local)
@@ -256,7 +256,7 @@ The `horodating` column (timestamp) is added to track **catalogue modification t
 ### 5.2 Update Rules
 
 - **On `--create`**: set to current timestamp for all rows.
-- **On `--update`**: 
+- **On `--update`**:
   - For rows that have **any column changed**: set `horodating = now()`.
   - For rows with no changes: leave `horodating` untouched.
 - **Never** reset `horodating` to an older value.
@@ -340,7 +340,7 @@ The `--update` command performs these steps:
 
 - **Language**: Python 3.11+
 - **Build system**: Hatchling + hatch-vcs (dynamic versioning from Git tags)
-- **Key libraries**: 
+- **Key libraries**:
   - `polars` or `pandas` + `pyarrow` for Parquet I/O
   - `pyyaml` for configuration
   - `click` or `argparse` for CLI
@@ -352,18 +352,18 @@ The `--update` command performs these steps:
 
 ## 9. Main Use Cases
 
-1. **Monitoring dashboard**  
-   - Aggregate presence ratios (SLC available? GRD available? A21 generated?)  
+1. **Monitoring dashboard**
+   - Aggregate presence ratios (SLC available? GRD available? A21 generated?)
    - Track dataflow progression over acquisition time and horodating time
 
-2. **SAFE name lookup page**  
-   - Enter product name (SLC, GRD, or OCN)  
+2. **SAFE name lookup page**
+   - Enter product name (SLC, GRD, or OCN)
    - Display status of each column (`presence`, `dataset`, meteorological data, horodating)
 
-3. **Spatio‑temporal heatmaps**  
+3. **Spatio‑temporal heatmaps**
    - For a given dataset (e.g., `sarwave`), produce maps of `Hs WW3` or `U10` using centroids derived from polygons.
 
-4. **Data quality monitoring**  
+4. **Data quality monitoring**
    - Use `--stats` to detect stale rows (old `horodating`) or missing enrichments.
 
 ## 10. Points of Vigilance

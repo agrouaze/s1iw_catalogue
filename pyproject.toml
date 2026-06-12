@@ -127,12 +127,10 @@ addopts = [
 
 [tool.coverage.run]
 source = ["tests"]
+branch = true
 
 [tool.coverage.paths]
 source = ["s1iw_catalogue"]
-
-[tool.coverage.run]
-branch = true
 
 [tool.coverage.report]
 fail_under = 50
