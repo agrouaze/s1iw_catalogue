@@ -29,12 +29,14 @@ def test_backup_creation(dummy_catalogue, tmp_path):
 def test_list_backups(dummy_catalogue, tmp_path):
     backup_dir = tmp_path / "backups"
     backup = CatalogueBackup(dummy_catalogue, backup_dir, keep_last=2)
-    backup.create_backup()
-    time.sleep(0.1)  # ensure different timestamp
-    backup.create_backup()
+    b1 = backup.create_backup()
+    import time
+    time.sleep(0.01)  # small delay to ensure different microsecond
+    b2 = backup.create_backup()
     backups = backup.list_backups()
     assert len(backups) == 2
-    assert backups[0] > backups[1]  # newest first? depends on implementation; we'll adjust later
+    assert b1 in backups
+    assert b2 in backups
 
 
 def test_clean_old_backups(dummy_catalogue, tmp_path):

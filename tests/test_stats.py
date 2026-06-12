@@ -6,25 +6,25 @@ import pytest
 from s1iw_catalogue.stats import CatalogueStats
 from s1iw_catalogue.schema import create_empty_catalogue
 
+import datetime
 
 @pytest.fixture
 def sample_df():
     df = create_empty_catalogue()
-    # Add a few dummy rows
     rows = [
         {
             "SAFE SLC": "S1A_IW_SLC__1SDV_20250101T123456_...",
             "presence SLC": "/data/S1A_IW_SLC_...",
             "dataset(s) d'appartenance": ["sarwave"],
-            "start date SAFE": pl.datetime(2025, 1, 1, 12, 34, 56),
-            "horodating": pl.datetime(2025, 1, 2, 0, 0, 0),
+            "start date SAFE": datetime.datetime(2025, 1, 1, 12, 34, 56),
+            "horodating": datetime.datetime(2025, 1, 2, 0, 0, 0),
         },
         {
             "SAFE GRD": "S1B_IW_GRD_...",
             "presence GRD": "/data/S1B_IW_GRD_...",
             "dataset(s) d'appartenance": ["scat"],
-            "start date SAFE": pl.datetime(2025, 1, 2, 10, 0, 0),
-            "horodating": pl.datetime(2025, 1, 3, 0, 0, 0),
+            "start date SAFE": datetime.datetime(2025, 1, 2, 10, 0, 0),
+            "horodating": datetime.datetime(2025, 1, 3, 0, 0, 0),
         },
     ]
     df = pl.DataFrame(rows, schema=df.schema)
@@ -64,14 +64,14 @@ def test_latest_acquisition(sample_df):
     stats = CatalogueStats(sample_df)
     name, dt = stats.latest_acquisition()
     assert name == "S1B_IW_GRD_..."
-    assert dt == pl.datetime(2025, 1, 2, 10, 0, 0)
+    assert dt == datetime.datetime(2025, 1, 2, 10, 0, 0)
 
 
 def test_latest_horodating(sample_df):
     stats = CatalogueStats(sample_df)
     name, dt = stats.latest_horodating()
     assert name == "S1B_IW_GRD_..."
-    assert dt == pl.datetime(2025, 1, 3, 0, 0, 0)
+    assert dt == datetime.datetime(2025, 1, 3, 0, 0, 0)
 
 
 def test_stale_rows(sample_df):

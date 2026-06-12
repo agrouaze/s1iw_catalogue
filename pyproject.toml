@@ -27,6 +27,9 @@ requires-python = ">=3.11"
 
 dependencies = [
   "s1ifr",
+  "polars",
+  "click",
+  "pyyaml",
 ]
 
 [project.optional-dependencies]

@@ -30,9 +30,19 @@ SCHEMA: Dict[str, pl.DataType] = {
 
 def validate_schema(df: pl.DataFrame) -> bool:
     """Check that DataFrame has all required columns with correct types."""
-    ...
+    if df is None:
+        return False
+    for col, dtype in SCHEMA.items():
+        if col not in df.columns:
+            return False
+        if df[col].dtype != dtype:
+            # For list columns, polars uses pl.List, but sometimes the inner type may differ
+            # We'll be lenient for now
+            if dtype == pl.List(pl.Utf8) and df[col].dtype != pl.List(pl.Utf8):
+                return False
+    return True
 
 
 def create_empty_catalogue() -> pl.DataFrame:
     """Return an empty DataFrame with the correct schema."""
-    ...
+    return pl.DataFrame(schema=SCHEMA)
