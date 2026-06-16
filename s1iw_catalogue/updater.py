@@ -5,7 +5,7 @@ import logging
 import re
 from pathlib import Path
 from typing import List, Optional, Tuple, Union
-
+from collections import defaultdict
 import polars as pl
 
 from s1iw_catalogue.schema import SCHEMA
@@ -198,6 +198,394 @@ class CatalogueUpdater:
         combined = pl.concat([slc_df, grd_df], how="vertical_relaxed").unique()
         logger.info(f"Total combined catalogue rows (before dedup): {combined.height}")
         return combined
+    
+    def link_slc_grd(self, df: pl.DataFrame) -> pl.DataFrame:
+        """
+        Link SLC and GRD products using two-step strategy:
+        1. Local matching based on naming conventions and time window search
+        2. CDSE fallback for orphans (using cdsodatacli)
+        """
+        logger.info("Linking SLC and GRD products...")
+        
+        # Step 1: Local matching (in-memory DataFrame operations)
+        df = self._local_link_slc_grd(df)
+        
+        # Step 2: CDSE fallback for rows still missing links
+        df = self._cdse_fallback_link(df)
+        
+        logger.info("SLC-GRD linking complete.")
+        return df
+
+    def _local_link_slc_grd(self, df: pl.DataFrame) -> pl.DataFrame:
+        """
+        Match SLC and GRD using data take ID (relative_orbit + orbit_number).
+        
+        Strategy:
+        1. Extract data_take_id by looking for the orbit pattern
+        2. Match SLC and GRD with same mission, polarization, and data_take_id
+        3. Within matches, find the closest time (within ±5 seconds)
+        """
+        logger.info("Step 1: Local SLC-GRD matching...")
+        
+        # Get rows that need linking
+        grd_rows = df.filter(pl.col("SAFE GRD").is_not_null() & pl.col("SAFE SLC").is_null())
+        slc_rows = df.filter(pl.col("SAFE SLC").is_not_null() & pl.col("SAFE GRD").is_null())
+        
+        logger.info(f"GRD rows needing linking: {grd_rows.height}")
+        logger.info(f"SLC rows needing linking: {slc_rows.height}")
+        
+        if grd_rows.height == 0 and slc_rows.height == 0:
+            logger.info("All rows already linked.")
+            return df
+        
+        # Extract data_take_id from SAFE name using a robust method
+        def extract_data_take_id(safe_name: str) -> str:
+            """Extract the data_take_id (orbit_number_relative_orbit) from any SAFE name."""
+            if not safe_name:
+                return ""
+            name = safe_name.removesuffix(".SAFE")
+            parts = name.split("_")
+            
+            # The orbit pattern is typically: 6 digits_6 hex chars (e.g., 020609_02710E)
+            import re
+            orbit_pattern = r"(_\d{6}_[A-F0-9]{6}_)"
+            match = re.search(orbit_pattern, name)
+            if match:
+                return match.group(1)
+            return ""
+        
+        def extract_start_time(safe_name: str) -> datetime.datetime:
+            """Extract start datetime from SAFE name."""
+            if not safe_name:
+                return None
+            name = safe_name.removesuffix(".SAFE")
+            parts = name.split("_")
+            
+            # Look for timestamp pattern (YYYYMMDDTHHMMSS)
+            import re
+            timestamp_pattern = r"(\d{8}T\d{6})"
+            matches = re.findall(timestamp_pattern, name)
+            if matches:
+                try:
+                    return datetime.datetime.strptime(matches[0], "%Y%m%dT%H%M%S")
+                except ValueError:
+                    return None
+            return None
+        
+        # Add columns to DataFrames
+        grd_rows = grd_rows.with_columns([
+            pl.col("SAFE GRD").map_elements(extract_data_take_id, return_dtype=pl.Utf8).alias("data_take_id"),
+            pl.col("SAFE GRD").map_elements(extract_start_time, return_dtype=pl.Datetime).alias("start_time")
+        ])
+        slc_rows = slc_rows.with_columns([
+            pl.col("SAFE SLC").map_elements(extract_data_take_id, return_dtype=pl.Utf8).alias("data_take_id"),
+            pl.col("SAFE SLC").map_elements(extract_start_time, return_dtype=pl.Datetime).alias("start_time")
+        ])
+        
+        # Log sample data take IDs
+        grd_samples = grd_rows["data_take_id"].head(3).to_list()
+        slc_samples = slc_rows["data_take_id"].head(3).to_list()
+        logger.info(f"GRD data_take_id samples: {grd_samples}")
+        logger.info(f"SLC data_take_id samples: {slc_samples}")
+        
+        # Build dictionaries keyed by (mission, polarization, data_take_id) for exact matching
+        slc_dict = {}  # (mission, pol, data_take_id) -> list of (slc_name, start_time)
+        for row in slc_rows.to_dicts():
+            mission = row.get("unité", "")
+            pol = row.get("polarization", "")
+            data_take_id = row.get("data_take_id", "")
+            start_time = row.get("start_time")
+            
+            if mission and pol and data_take_id:
+                key = (mission, pol, data_take_id)
+                if key not in slc_dict:
+                    slc_dict[key] = []
+                slc_dict[key].append({
+                    "safe_name": row["SAFE SLC"],
+                    "start_time": start_time
+                })
+        
+        updates = {}
+        matched_count = 0
+        
+        # For each GRD, find best matching SLC
+        for grd_row in grd_rows.to_dicts():
+            grd_name = grd_row["SAFE GRD"]
+            grd_mission = grd_row.get("unité", "")
+            grd_pol = grd_row.get("polarization", "")
+            grd_data_take_id = grd_row.get("data_take_id", "")
+            grd_start_time = grd_row.get("start_time")
+            
+            if not grd_mission or not grd_pol or not grd_data_take_id:
+                logger.warning(f"GRD missing metadata: {grd_name}")
+                continue
+            
+            key = (grd_mission, grd_pol, grd_data_take_id)
+            
+            if key not in slc_dict:
+                logger.warning(f"No SLC found for GRD {grd_name} (key={key})")
+                continue
+            
+            # Find SLC with closest time (within ±5 seconds)
+            best_match = None
+            best_time_diff = 999.0
+            
+            for slc_info in slc_dict[key]:
+                slc_name = slc_info["safe_name"]
+                slc_start_time = slc_info["start_time"]
+                
+                if grd_start_time is not None and slc_start_time is not None:
+                    time_diff = abs((grd_start_time - slc_start_time).total_seconds())
+                    
+                    if time_diff <= 5.0 and time_diff < best_time_diff:
+                        best_time_diff = time_diff
+                        best_match = slc_name
+            
+            if best_match is not None:
+                updates[grd_name] = best_match
+                matched_count += 1
+                logger.info(f"Local match: GRD {grd_name} -> SLC {best_match} "
+                        f"(data_take_id={grd_data_take_id}, time_diff={best_time_diff:.1f}s)")
+            else:
+                # Check if there's any SLC with same data_take_id but time diff > 5s
+                if key in slc_dict:
+                    first_slc = slc_dict[key][0]["safe_name"]
+                    logger.warning(f"GRD {grd_name}: No SLC within ±5s. "
+                                f"Closest available SLC: {first_slc} (data_take_id={grd_data_take_id})")
+        
+        # Apply updates to the DataFrame
+        for grd_name, slc_name in updates.items():
+            df = df.with_columns(
+                pl.when(pl.col("SAFE GRD") == grd_name)
+                .then(pl.lit(slc_name))
+                .otherwise(pl.col("SAFE SLC"))
+                .alias("SAFE SLC")
+            )
+            df = df.with_columns(
+                pl.when(pl.col("SAFE SLC") == slc_name)
+                .then(pl.lit(grd_name))
+                .otherwise(pl.col("SAFE GRD"))
+                .alias("SAFE GRD")
+            )
+        
+         # After the matching loop, compute counts
+        total_grd_needing = grd_rows.height
+        matched_count = len(updates)  # number of GRD entries that got linked
+        percentage = (matched_count / total_grd_needing * 100) if total_grd_needing > 0 else 0.0
+        
+        logger.info(f"Step 1 complete: {matched_count}/{total_grd_needing} GRD entries linked locally ({percentage:.1f}%)")
+        return df
+
+    def _extract_data_take(self, safe_name: str) -> str:
+        """
+        Extract the data take identifier from a SAFE name.
+        Example: S1A_IW_SLC__1SDV_20190711T181227_20190711T181254_028073_032B9D_CC09.SAFE
+        Returns: 028073_032B9D
+        """
+        name = safe_name.removesuffix(".SAFE")
+        parts = name.split("_")
+        if len(parts) >= 7:
+            # Return the parts at indices 5 and 6 (0-based)
+            return f"{parts[5]}_{parts[6]}"
+        return ""
+
+    def _extract_base_pattern(self, safe_name: str) -> str:
+        """
+        Extract the base pattern without suffix.
+        """
+        name = safe_name.removesuffix(".SAFE")
+        parts = name.split("_")
+        if len(parts) >= 7:
+            # Return parts before the data take identifier
+            return "_".join(parts[:5])
+        return name
+
+    def _get_base_pattern(self, safe_name: str, product_type: str) -> str:
+        """Extract the base pattern of a SAFE name without the timestamp."""
+        # Remove .SAFE suffix
+        name = safe_name.removesuffix(".SAFE")
+        parts = name.split("_")
+        if len(parts) < 9:
+            return ""
+        # Return parts before the timestamp
+        return "_".join(parts[:4])  # mission, IW, product_type, polarization
+
+    def _grd_to_slc_pattern_with_offset(self, grd_name: str, offset_seconds: int) -> str:
+        """
+        Convert GRD naming pattern to expected SLC pattern with a time offset.
+        offset_seconds can be negative or positive.
+        """
+        slc_name = grd_name.replace("_GRDH_", "_SLC__").replace("_GRD_", "_SLC_")
+        
+        def adjust_timestamp(match):
+            dt = datetime.datetime.strptime(match.group(0), "%Y%m%dT%H%M%S")
+            dt = dt + datetime.timedelta(seconds=offset_seconds)
+            return dt.strftime("%Y%m%dT%H%M%S")
+        
+        slc_name = re.sub(r"\d{8}T\d{6}", adjust_timestamp, slc_name, count=1)
+        return slc_name
+
+    def _slc_to_grd_pattern_with_offset(self, slc_name: str, offset_seconds: int) -> str:
+        """
+        Convert SLC naming pattern to expected GRD pattern with a time offset.
+        offset_seconds can be negative or positive.
+        """
+        grd_name = slc_name.replace("_SLC__", "_GRDH_").replace("_SLC_", "_GRD_")
+        
+        def adjust_timestamp(match):
+            dt = datetime.datetime.strptime(match.group(0), "%Y%m%dT%H%M%S")
+            dt = dt + datetime.timedelta(seconds=offset_seconds)
+            return dt.strftime("%Y%m%dT%H%M%S")
+        
+        grd_name = re.sub(r"\d{8}T\d{6}", adjust_timestamp, grd_name, count=1)
+        return grd_name
+
+    def _cdse_fallback_link(self, df: pl.DataFrame) -> pl.DataFrame:
+        """
+        For rows still missing links, query CDSE using cdsodatacli.
+        """
+        logger.info("Step 2: CDSE fallback for orphan products...")
+        
+        grd_orphans = df.filter(
+            pl.col("SAFE GRD").is_not_null() & pl.col("SAFE SLC").is_null()
+        )
+        slc_orphans = df.filter(
+            pl.col("SAFE SLC").is_not_null() & pl.col("SAFE GRD").is_null()
+        )
+        
+        total_orphans = grd_orphans.height + slc_orphans.height
+        if total_orphans == 0:
+            logger.info("No orphans to resolve via CDSE")
+            return df
+        
+        logger.info(f"Found {grd_orphans.height} GRD orphans and {slc_orphans.height} SLC orphans (total {total_orphans})")
+        
+        # Process GRD orphans
+        updates_grd = {}
+        for row in grd_orphans.to_dicts():
+            grd_name = row["SAFE GRD"]
+            try:
+                slc_name = self._call_cdse_get_parent_slc(grd_name)
+                if slc_name:
+                    updates_grd[grd_name] = slc_name
+                    logger.info(f"CDSE found parent SLC for {grd_name} -> {slc_name}")
+                else:
+                    logger.warning(f"CDSE could not find SLC for {grd_name}")
+            except Exception as e:
+                logger.error(f"CDSE error for {grd_name}: {e}")
+        
+        # Apply updates for GRD orphans (code unchanged)
+        for grd_name, slc_name in updates_grd.items():
+            df = df.with_columns(
+                pl.when(pl.col("SAFE GRD") == grd_name)
+                .then(pl.lit(slc_name))
+                .otherwise(pl.col("SAFE SLC"))
+                .alias("SAFE SLC")
+            )
+            df = df.with_columns(
+                pl.when(pl.col("SAFE SLC") == slc_name)
+                .then(pl.lit(grd_name))
+                .otherwise(pl.col("SAFE GRD"))
+                .alias("SAFE GRD")
+            )
+        
+        # Process SLC orphans
+        updates_slc = {}
+        for row in slc_orphans.to_dicts():
+            slc_name = row["SAFE SLC"]
+            if any(grd for grd, slc in updates_grd.items() if slc == slc_name):
+                continue
+            try:
+                grd_name = self._call_cdse_get_derived_grd(slc_name)
+                if grd_name:
+                    updates_slc[slc_name] = grd_name
+                    logger.info(f"CDSE found derived GRD for {slc_name} -> {grd_name}")
+                else:
+                    logger.warning(f"CDSE could not find GRD for {slc_name}")
+            except Exception as e:
+                logger.error(f"CDSE error for {slc_name}: {e}")
+        
+        # Apply updates for SLC orphans (code unchanged)
+        for slc_name, grd_name in updates_slc.items():
+            df = df.with_columns(
+                pl.when(pl.col("SAFE SLC") == slc_name)
+                .then(pl.lit(grd_name))
+                .otherwise(pl.col("SAFE GRD"))
+                .alias("SAFE GRD")
+            )
+            df = df.with_columns(
+                pl.when(pl.col("SAFE GRD") == grd_name)
+                .then(pl.lit(slc_name))
+                .otherwise(pl.col("SAFE SLC"))
+                .alias("SAFE SLC")
+            )
+        
+        total_updates = len(updates_grd) + len(updates_slc)
+        resolved_percentage = (total_updates / total_orphans * 100) if total_orphans > 0 else 0.0
+        logger.info(f"Step 2 complete: {total_updates}/{total_orphans} orphan entries resolved via CDSE ({resolved_percentage:.1f}%)")
+        return df
+
+    def _call_cdse_get_parent_slc(self, grd_name: str) -> Optional[str]:
+        """
+        Query CDSE to find the parent SLC for a given GRD.
+        Uses cdsodatacli.scripts.match_s1_product_types.find_product_for_safe.
+        """
+        try:
+            from cdsodatacli.scripts.match_s1_product_types import find_product_for_safe
+        except ImportError as e:
+            logger.warning(f"cdsodatacli not installed: {e}. CDSE fallback disabled.")
+            return None
+
+        target_type = "SLC_"  # Valid type for SLC
+        delta_dist = defaultdict(int)
+
+        try:
+            result = find_product_for_safe(
+                source_id=grd_name,
+                target_type=target_type,
+                logger=logger,
+                delta_distribution=delta_dist
+            )
+            if result and "target_name" in result:
+                return result["target_name"]
+            else:
+                note = result.get("note", "unknown reason")
+                logger.warning(f"CDSE did not find SLC for {grd_name}: {note}")
+                return None
+        except Exception as e:
+            logger.error(f"CDSE query failed for {grd_name}: {e}")
+            return None
+
+
+    def _call_cdse_get_derived_grd(self, slc_name: str) -> Optional[str]:
+        """
+        Query CDSE to find a derived GRD for a given SLC.
+        """
+        try:
+            from cdsodatacli.scripts.match_s1_product_types import find_product_for_safe
+        except ImportError as e:
+            logger.warning(f"cdsodatacli not installed: {e}. CDSE fallback disabled.")
+            return None
+
+        target_type = "GRDH"  # Most common GRD type; adjust if needed
+        delta_dist = defaultdict(int)
+
+        try:
+            result = find_product_for_safe(
+                source_id=slc_name,
+                target_type=target_type,
+                logger=logger,
+                delta_distribution=delta_dist
+            )
+            if result and "target_name" in result:
+                return result["target_name"]
+            else:
+                note = result.get("note", "unknown reason")
+                logger.warning(f"CDSE did not find GRD for {slc_name}: {note}")
+                return None
+        except Exception as e:
+            logger.error(f"CDSE query failed for {slc_name}: {e}")
+            return None
 
     def find_new_safe(
         self,

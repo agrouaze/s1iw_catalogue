@@ -32,6 +32,7 @@ class S1IWCatalogue:
         grd_listings = self._config["paths"]["reference_listings"]["grd"]
         # Build catalogue from listings
         df = self._updater.build_from_listings(slc_listings, grd_listings)
+        df = self._updater.link_slc_grd(df)
         # Write to Parquet
         df.write_parquet(out_path, compression="snappy")
         print(f"Catalogue created at {out_path}")
