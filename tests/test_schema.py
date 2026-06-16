@@ -24,8 +24,10 @@ def test_schema_dict_has_all_columns():
         "v10 ecmwf",
         "start date SAFE",
         "horodating",
-        "polygon of the acquisition from CDSE",
-        "S3path from CDSE",
+        "polygon SLC",       # <-- changed from "polygon of the acquisition from CDSE"
+        "polygon GRD",       # <-- changed from "polygon of the acquisition from CDSE"
+        "S3path SLC",        # <-- changed from "S3path from CDSE"
+        "S3path GRD",        # <-- changed from "S3path from CDSE"
         "polarization",
         "unité",
     ]

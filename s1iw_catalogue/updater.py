@@ -4,7 +4,7 @@ import datetime
 import logging
 import re
 from pathlib import Path
-from typing import List, Optional, Tuple, Union
+from typing import List, Optional, Tuple, Union, Dict
 from collections import defaultdict
 import polars as pl
 
@@ -139,14 +139,59 @@ class CatalogueUpdater:
         return combined
 
     def build_from_listings(self,
-                           slc_listings: Union[str, Path, List],
-                           grd_listings: Union[str, Path, List]) -> pl.DataFrame:
-        """Combine SLC and GRD listings into a catalogue DataFrame (no external queries)."""
+                        slc_listings: Union[str, Path, List, Dict],
+                        grd_listings: Union[str, Path, List, Dict]) -> pl.DataFrame:
+        """
+        Combine SLC and GRD listings into a catalogue DataFrame (no external queries).
+        
+        Now handles dataset names from the configuration structure:
+        paths:
+        reference_listings:
+            slc:
+            "hibou2": "assets/listings/dummy_slc_listing_hibou.txt"
+            "castor5": "assets/listings/dummy_slc_listing_castor.txt"
+            grd:
+            "zebra": "assets/listings/dummy_grd_listing_zebre.txt"
+        """
         logger.info("Building catalogue from SLC listings...")
-        slc_df_raw = self.read_listings(slc_listings)
-        if slc_df_raw.height == 0:
+        
+        # Handle both old format (list) and new format (dict with dataset names)
+        slc_dfs = []
+        if isinstance(slc_listings, dict):
+            # New format: dataset_name -> listing_path
+            for dataset_name, listing_path in slc_listings.items():
+                logger.info(f"Reading SLC dataset '{dataset_name}' from {listing_path}")
+                df_raw = self.read_listings(listing_path)
+                if df_raw.height > 0:
+                    # Add dataset name to each row
+                    df_raw = df_raw.with_columns(
+                        pl.lit([dataset_name], dtype=pl.List(pl.Utf8)).alias("dataset(s) d'appartenance")
+                    )
+                    slc_dfs.append(df_raw)
+                else:
+                    logger.warning(f"No valid SLC entries found in dataset '{dataset_name}'")
+        else:
+            # Old format: single path or list of paths (no dataset names)
+            df_raw = self.read_listings(slc_listings)
+            if df_raw.height > 0:
+                df_raw = df_raw.with_columns(
+                    pl.lit([], dtype=pl.List(pl.Utf8)).alias("dataset(s) d'appartenance")
+                )
+                slc_dfs.append(df_raw)
+        
+        if not slc_dfs:
             logger.warning("No valid SLC entries found. The SLC part will be empty.")
-
+            slc_df_raw = pl.DataFrame(schema={
+                "safe_name": pl.Utf8,
+                "mission": pl.Utf8,
+                "product_type": pl.Utf8,
+                "polarization": pl.Utf8,
+                "start_date": pl.Datetime,
+                "dataset(s) d'appartenance": pl.List(pl.Utf8),
+            })
+        else:
+            slc_df_raw = pl.concat(slc_dfs, how="vertical_relaxed")
+        
         # Build SLC rows
         slc_df = slc_df_raw.with_columns(
             pl.lit(None, dtype=pl.Utf8).alias("SAFE GRD"),
@@ -157,26 +202,58 @@ class CatalogueUpdater:
             pl.lit(None, dtype=pl.Utf8).alias("presence OCN"),
             pl.lit(None, dtype=pl.Utf8).alias("presence L1B XSP A21"),
             pl.lit(None, dtype=pl.Utf8).alias("presence L1C XSP B17"),
-            pl.lit([], dtype=pl.List(pl.Utf8)).alias("dataset(s) d'appartenance"),
-            pl.lit(None, dtype=pl.Float32).alias("Hs WW3"),
-            pl.lit(None, dtype=pl.Float32).alias("Tp WW3"),
-            pl.lit(None, dtype=pl.Float32).alias("U10 ecmwf"),
-            pl.lit(None, dtype=pl.Float32).alias("v10 ecmwf"),
+            # dataset(s) d'appartenance already has the dataset name(s)
+            pl.lit(None, dtype=pl.Float32).alias("Hs WW3"),      # <-- ADD THIS
+            pl.lit(None, dtype=pl.Float32).alias("Tp WW3"),      # <-- ADD THIS
+            pl.lit(None, dtype=pl.Float32).alias("U10 ecmwf"),   # <-- ADD THIS
+            pl.lit(None, dtype=pl.Float32).alias("v10 ecmwf"),   # <-- ADD THIS
             pl.col("start_date").alias("start date SAFE"),
             pl.lit(datetime.datetime.now()).alias("horodating"),
-            pl.lit(None, dtype=pl.Utf8).alias("polygon SLC"),      # placeholder
+            pl.lit(None, dtype=pl.Utf8).alias("polygon SLC"),
             pl.lit(None, dtype=pl.Utf8).alias("polygon GRD"),
             pl.lit(None, dtype=pl.Utf8).alias("S3path SLC"),
             pl.lit(None, dtype=pl.Utf8).alias("S3path GRD"),
             pl.col("polarization").alias("polarization"),
             pl.col("mission").alias("unité"),
         ).select(list(SCHEMA.keys()))
-
+        
+        # GRD listings
         logger.info("Building catalogue from GRD listings...")
-        grd_df_raw = self.read_listings(grd_listings)
-        if grd_df_raw.height == 0:
+        
+        grd_dfs = []
+        if isinstance(grd_listings, dict):
+            for dataset_name, listing_path in grd_listings.items():
+                logger.info(f"Reading GRD dataset '{dataset_name}' from {listing_path}")
+                df_raw = self.read_listings(listing_path)
+                if df_raw.height > 0:
+                    df_raw = df_raw.with_columns(
+                        pl.lit([dataset_name], dtype=pl.List(pl.Utf8)).alias("dataset(s) d'appartenance")
+                    )
+                    grd_dfs.append(df_raw)
+                else:
+                    logger.warning(f"No valid GRD entries found in dataset '{dataset_name}'")
+        else:
+            df_raw = self.read_listings(grd_listings)
+            if df_raw.height > 0:
+                df_raw = df_raw.with_columns(
+                    pl.lit([], dtype=pl.List(pl.Utf8)).alias("dataset(s) d'appartenance")
+                )
+                grd_dfs.append(df_raw)
+        
+        if not grd_dfs:
             logger.warning("No valid GRD entries found. The GRD part will be empty.")
-
+            grd_df_raw = pl.DataFrame(schema={
+                "safe_name": pl.Utf8,
+                "mission": pl.Utf8,
+                "product_type": pl.Utf8,
+                "polarization": pl.Utf8,
+                "start_date": pl.Datetime,
+                "dataset(s) d'appartenance": pl.List(pl.Utf8),
+            })
+        else:
+            grd_df_raw = pl.concat(grd_dfs, how="vertical_relaxed")
+        
+        # Build GRD rows
         grd_df = grd_df_raw.with_columns(
             pl.col("safe_name").alias("SAFE GRD"),
             pl.lit(None, dtype=pl.Utf8).alias("SAFE SLC"),
@@ -186,21 +263,21 @@ class CatalogueUpdater:
             pl.lit(None, dtype=pl.Utf8).alias("presence OCN"),
             pl.lit(None, dtype=pl.Utf8).alias("presence L1B XSP A21"),
             pl.lit(None, dtype=pl.Utf8).alias("presence L1C XSP B17"),
-            pl.lit([], dtype=pl.List(pl.Utf8)).alias("dataset(s) d'appartenance"),
-            pl.lit(None, dtype=pl.Float32).alias("Hs WW3"),
-            pl.lit(None, dtype=pl.Float32).alias("Tp WW3"),
-            pl.lit(None, dtype=pl.Float32).alias("U10 ecmwf"),
-            pl.lit(None, dtype=pl.Float32).alias("v10 ecmwf"),
+            pl.lit(None, dtype=pl.Float32).alias("Hs WW3"),      # <-- ADD THIS
+            pl.lit(None, dtype=pl.Float32).alias("Tp WW3"),      # <-- ADD THIS
+            pl.lit(None, dtype=pl.Float32).alias("U10 ecmwf"),   # <-- ADD THIS
+            pl.lit(None, dtype=pl.Float32).alias("v10 ecmwf"),   # <-- ADD THIS
             pl.col("start_date").alias("start date SAFE"),
             pl.lit(datetime.datetime.now()).alias("horodating"),
-            pl.lit(None, dtype=pl.Utf8).alias("polygon SLC"),      # placeholder
+            pl.lit(None, dtype=pl.Utf8).alias("polygon SLC"),
             pl.lit(None, dtype=pl.Utf8).alias("polygon GRD"),
             pl.lit(None, dtype=pl.Utf8).alias("S3path SLC"),
             pl.lit(None, dtype=pl.Utf8).alias("S3path GRD"),
             pl.col("polarization").alias("polarization"),
             pl.col("mission").alias("unité"),
         ).select(list(SCHEMA.keys()))
-
+        
+        # Combine SLC and GRD
         combined = pl.concat([slc_df, grd_df], how="vertical_relaxed").unique()
         logger.info(f"Total combined catalogue rows (before dedup): {combined.height}")
         return combined
@@ -1159,8 +1236,6 @@ class CatalogueUpdater:
         
         return df
     
-    def update_dataset_membership(self, df: pl.DataFrame) -> pl.DataFrame:
-        return df
 
     def update_meteorology(self, df: pl.DataFrame, force: bool = False) -> pl.DataFrame:
         return df

@@ -33,14 +33,9 @@ def test_update_presence_columns(dummy_config):
     """Test that update_presence_columns method exists."""
     updater = CatalogueUpdater(dummy_config)
     _df = create_empty_catalogue()
-    assert hasattr(updater, "update_presence_columns")
+    assert hasattr(updater, "_update_presence_columns")
 
 
-def test_update_dataset_membership(dummy_config):
-    """Test that update_dataset_membership method exists."""
-    updater = CatalogueUpdater(dummy_config)
-    _df = create_empty_catalogue()
-    assert hasattr(updater, "update_dataset_membership")
 
 
 def test_update_meteorology(dummy_config):
