@@ -4,6 +4,7 @@ from pathlib import Path
 from typing import Optional
 
 import click
+import polars as pl
 
 from s1iw_catalogue.catalogue import S1IWCatalogue
 from s1iw_catalogue.config import load_config
@@ -87,7 +88,6 @@ def stats(
 ) -> None:
     """Print statistics about the catalogue."""
     # Load catalogue DataFrame directly (no need for S1IWCatalogue instance)
-    import polars as pl
     df = pl.read_parquet(catalogue)
     stats_obj = CatalogueStats(df)
     if output:
@@ -98,15 +98,22 @@ def stats(
         click.echo(f"Catalogue: {catalogue}")
         click.echo(f"Total entries: {stats_obj.total_count()}")
         counts = stats_obj.product_type_counts()
-        click.echo(f"  SLC: {counts.get('SLC',0)}")
-        click.echo(f"  GRD: {counts.get('GRD',0)}")
-        click.echo(f"  OCN: {counts.get('OCN',0)}")
+        click.echo(f"  SLC: {counts.get('SLC', 0)}")
+        click.echo(f"  GRD: {counts.get('GRD', 0)}")
+        click.echo(f"  OCN: {counts.get('OCN', 0)}")
         # Optionally show dataset counts
         ds_counts = stats_obj.dataset_membership_counts()
         if ds_counts:
             click.echo("Dataset memberships:")
             for ds, cnt in ds_counts.items():
                 click.echo(f"  {ds}: {cnt}")
+        
+        # Show presence stats if available
+        presence = stats_obj.presence_completeness()
+        if presence:
+            click.echo("\nPresence completeness:")
+            for col, pct in presence.items():
+                click.echo(f"  {col}: {pct:.1f}%")
 
 
 @main.command()
