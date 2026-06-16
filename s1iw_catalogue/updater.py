@@ -891,7 +891,6 @@ class CatalogueUpdater:
                 continue
             
             gdf = gpd.GeoDataFrame(records, crs="EPSG:4326")
-            breakpoint()
             # Add required id_query column if missing
             if "id_query" not in gdf.columns:
                 gdf["id_query"] = [f"batch_{i}_{j}" for j in range(len(gdf))]
@@ -1028,7 +1027,7 @@ class CatalogueUpdater:
     def _update_presence_columns(self, df: pl.DataFrame, force: bool = False) -> pl.DataFrame:
         """
         Update presence columns by checking if SLC and GRD products exist on Ifremer storage.
-        Uses s1ifr.get_path_from_base_safe to check existence.
+        Uses s1ifr.get_path_from_base_safe to check existence across all configured archives.
         """
         logger.info("Checking presence of products on Ifremer storage...")
         
@@ -1043,13 +1042,36 @@ class CatalogueUpdater:
         if s1ifr_config_path:
             logger.info(f"Using s1ifr config file: {s1ifr_config_path}")
         
+        # Determine which archives to check
+        # If we have the s1ifr config, we can read all archive names from it
+        archive_names = ["datawork", "scale"]  # default fallback
+        
+        if s1ifr_config_path:
+            try:
+                import yaml
+                with open(s1ifr_config_path, 'r') as f:
+                    s1ifr_config = yaml.safe_load(f)
+                # Get all top-level keys from the 'paths' section that are archive names
+                if "paths" in s1ifr_config:
+                    # Common archive names: datawork, scale, scratch
+                    # We could also look for any key that contains 'archive' or specific archive paths
+                    potential_archives = ["datawork", "scale"]
+                    # Also check if there are other archive paths defined
+                    for key in s1ifr_config["paths"].keys():
+                        if key not in potential_archives and isinstance(s1ifr_config["paths"][key], dict):
+                            # Check if this looks like an archive (has archive_esa or similar)
+                            if any("archive" in k.lower() for k in s1ifr_config["paths"][key].keys()):
+                                potential_archives.append(key)
+                    archive_names = potential_archives
+                    logger.info(f"Found archives in s1ifr config: {archive_names}")
+            except Exception as e:
+                logger.warning(f"Could not read s1ifr config to get archives: {e}. Using defaults.")
+        
         # Get rows that need presence information
         if force:
-            # Check all products
             slc_rows = df.filter(pl.col("SAFE SLC").is_not_null())
             grd_rows = df.filter(pl.col("SAFE GRD").is_not_null())
         else:
-            # Only check products that don't have presence information yet
             slc_rows = df.filter(
                 pl.col("SAFE SLC").is_not_null() & pl.col("presence SLC").is_null()
             )
@@ -1059,45 +1081,36 @@ class CatalogueUpdater:
         
         logger.info(f"Checking presence for {slc_rows.height} SLC and {grd_rows.height} GRD products.")
         
+        def find_product_path(safe_name: str, product_type: str) -> Optional[str]:
+            """Find product path by checking all archives sequentially."""
+            for archive_name in archive_names:
+                try:
+                    path = get_path_from_base_safe(
+                        safe_basename=safe_name,
+                        archive_name=archive_name,
+                        check_existence=True,
+                        config_path=s1ifr_config_path,
+                    )
+                    if path:
+                        logger.debug(f"{product_type} found in {archive_name}: {safe_name} -> {path}")
+                        return path
+                except Exception as e:
+                    logger.debug(f"Error checking {archive_name} for {safe_name}: {e}")
+                    continue
+            logger.debug(f"{product_type} not found in any archive: {safe_name}")
+            return None
+        
         # Check SLC products
         slc_presence = {}
         for row in slc_rows.to_dicts():
             safe_name = row["SAFE SLC"]
-            try:
-                path = get_path_from_base_safe(
-                    safe_basename=safe_name,
-                    archive_name="datawork",  # default archive
-                    check_existence=True,
-                    config_path=s1ifr_config_path,
-                )
-                slc_presence[safe_name] = path if path else None
-                if path:
-                    logger.debug(f"SLC found: {safe_name} -> {path}")
-                else:
-                    logger.debug(f"SLC not found: {safe_name}")
-            except Exception as e:
-                logger.warning(f"Error checking presence for SLC {safe_name}: {e}")
-                slc_presence[safe_name] = None
+            slc_presence[safe_name] = find_product_path(safe_name, "SLC")
         
         # Check GRD products
         grd_presence = {}
         for row in grd_rows.to_dicts():
             safe_name = row["SAFE GRD"]
-            try:
-                path = get_path_from_base_safe(
-                    safe_basename=safe_name,
-                    archive_name="datawork",
-                    check_existence=True,
-                    config_path=s1ifr_config_path,
-                )
-                grd_presence[safe_name] = path if path else None
-                if path:
-                    logger.debug(f"GRD found: {safe_name} -> {path}")
-                else:
-                    logger.debug(f"GRD not found: {safe_name}")
-            except Exception as e:
-                logger.warning(f"Error checking presence for GRD {safe_name}: {e}")
-                grd_presence[safe_name] = None
+            grd_presence[safe_name] = find_product_path(safe_name, "GRD")
         
         # Update SLC presence column
         df = df.with_columns(
