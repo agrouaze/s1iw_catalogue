@@ -52,6 +52,9 @@ dev = [
   "pytest-cov",
 ]
 
+[project.scripts]
+catalog-iw = "s1iw_catalogue.cli:main"
+
 [tool.pip]
 extra-index-url = [
   "https://gitlab.ifremer.fr/api/v4/projects/4991/packages/pypi/simple",

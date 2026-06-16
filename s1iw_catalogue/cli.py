@@ -1,10 +1,13 @@
 """Command-line interface for s1iw_catalogue."""
 
+from pathlib import Path
 from typing import Optional
 
-from pathlib import Path
-
 import click
+
+from s1iw_catalogue.catalogue import S1IWCatalogue
+from s1iw_catalogue.config import load_config
+from s1iw_catalogue.stats import CatalogueStats
 
 
 @click.group()
@@ -12,10 +15,12 @@ import click
     "--config", "-c", type=click.Path(exists=True), help="Path to configuration file."
 )
 @click.pass_context
-def main(ctx: click.Context, config: Path | None) -> None:
+def main(ctx: click.Context, config: Optional[Path]) -> None:
     """s1iw_catalogue – Exhaustive catalogue of Sentinel-1 IW SAFE products."""
     ctx.ensure_object(dict)
-    ctx.obj["config"] = config
+    # Load configuration once and store in context
+    cfg = load_config(config_path=config)
+    ctx.obj["config"] = cfg
 
 
 @main.command()
@@ -29,7 +34,11 @@ def main(ctx: click.Context, config: Path | None) -> None:
 @click.pass_context
 def create(ctx: click.Context, output: Path) -> None:
     """Create a brand new catalogue from scratch."""
-    click.echo(f"Creating catalogue at {output}")
+    cfg = ctx.obj["config"]
+    cat = S1IWCatalogue(catalogue_path=output, config=cfg)
+    click.echo(f"Creating catalogue at {output}...")
+    cat.create(output_path=output)
+    click.echo("Done.")
 
 
 @main.command()
@@ -48,7 +57,11 @@ def create(ctx: click.Context, output: Path) -> None:
 @click.pass_context
 def update(ctx: click.Context, catalogue: Path, force_meteo: bool) -> None:
     """Incrementally update the catalogue."""
-    click.echo(f"Updating {catalogue}")
+    cfg = ctx.obj["config"]
+    cat = S1IWCatalogue(catalogue_path=catalogue, config=cfg)
+    click.echo(f"Updating {catalogue}...")
+    cat.update(force_meteo_refresh=force_meteo)
+    click.echo("Done.")
 
 
 @main.command()
@@ -68,12 +81,32 @@ def update(ctx: click.Context, catalogue: Path, force_meteo: bool) -> None:
 def stats(
     ctx: click.Context,
     catalogue: Path,
-    dataset: str | None,
+    dataset: Optional[str],
     verbose: bool,
-    output: Path | None,
+    output: Optional[Path],
 ) -> None:
     """Print statistics about the catalogue."""
-    click.echo(f"Stats for {catalogue}")
+    # Load catalogue DataFrame directly (no need for S1IWCatalogue instance)
+    import polars as pl
+    df = pl.read_parquet(catalogue)
+    stats_obj = CatalogueStats(df)
+    if output:
+        stats_obj.to_json(output)
+        click.echo(f"Statistics written to {output}")
+    else:
+        # Print a summary to console
+        click.echo(f"Catalogue: {catalogue}")
+        click.echo(f"Total entries: {stats_obj.total_count()}")
+        counts = stats_obj.product_type_counts()
+        click.echo(f"  SLC: {counts.get('SLC',0)}")
+        click.echo(f"  GRD: {counts.get('GRD',0)}")
+        click.echo(f"  OCN: {counts.get('OCN',0)}")
+        # Optionally show dataset counts
+        ds_counts = stats_obj.dataset_membership_counts()
+        if ds_counts:
+            click.echo("Dataset memberships:")
+            for ds, cnt in ds_counts.items():
+                click.echo(f"  {ds}: {cnt}")
 
 
 @main.command()
@@ -88,9 +121,12 @@ def stats(
     "--backup-dir", "-d", type=click.Path(), help="Directory to store backups."
 )
 @click.pass_context
-def backup(ctx: click.Context, catalogue: Path, backup_dir: Path | None) -> None:
+def backup(ctx: click.Context, catalogue: Path, backup_dir: Optional[Path]) -> None:
     """Create a timestamped backup of the catalogue."""
-    click.echo(f"Backing up {catalogue}")
+    cfg = ctx.obj["config"]
+    cat = S1IWCatalogue(catalogue_path=catalogue, config=cfg)
+    backup_path = cat.backup(backup_dir=backup_dir)
+    click.echo(f"Backup created: {backup_path}")
 
 
 @main.command()
@@ -107,7 +143,15 @@ def backup(ctx: click.Context, catalogue: Path, backup_dir: Path | None) -> None
 @click.pass_context
 def query(ctx: click.Context, catalogue: Path, safe_name: str) -> None:
     """Look up a SAFE by name and display its information."""
-    click.echo(f"Querying {catalogue} for {safe_name}")
+    cfg = ctx.obj["config"]
+    cat = S1IWCatalogue(catalogue_path=catalogue, config=cfg)
+    result = cat.query(safe_name)
+    if result is None:
+        click.echo(f"SAFE '{safe_name}' not found in catalogue.")
+    else:
+        click.echo("SAFE information:")
+        for key, value in result.items():
+            click.echo(f"  {key}: {value}")
 
 
 if __name__ == "__main__":

@@ -1,0 +1,16 @@
+paths:
+  reference_listings:
+    slc:
+      - "/shared/listings/slc_reference_1.csv"
+      - "/shared/listings/slc_reference_2.csv"
+      - "/shared/listings/slc_sarwave.csv"
+      # or use a directory: "/shared/listings/slc/*.csv"
+    grd:
+      - "/shared/listings/grd_reference.csv"
+      - "/shared/listings/grd_sarwave.csv"
+    coloc:   # optional
+      - "/shared/listings/coloc_listing_1.csv"
+      - "/shared/listings/coloc_listing_2.csv"
+  output:
+    catalogue: "/shared/catalogues/sentinel-1_exhaustive_IW_SAFE_working_material.parquet"
+    backups: "/shared/catalogues/backups/"
