@@ -48,7 +48,7 @@ class CatalogueUpdater:
         # Group2: product type (SLC, GRDH, OCN, ...)
         # Group3: polarization (e.g., 1SDV, 1SSV, etc.) – can be empty if double underscore
         # Group4: start date (YYYYMMDDTHHMMSS)
-        pattern = r"^(S1[ABCD])_IW_([A-Z]+)_+([0-9A-Z]*)_(\d{8}T\d{6})_"
+        pattern = r"^(S1[ABCD])_IW_([A-Z]+)_+([0-9A-Z]*)_(\d{8}T\d{6})_(\d{8}T\d{6})"
         match = re.match(pattern, name)
         if not match:
             raise ValueError(f"Unable to parse SAFE name: {safe_name}")
@@ -58,13 +58,15 @@ class CatalogueUpdater:
         polarization = match.group(3) if match.group(3) else ""  # empty if double underscore
         start_date_str = match.group(4)
         start_date = datetime.datetime.strptime(start_date_str, "%Y%m%dT%H%M%S")
-
+        end_date_str = match.group(5)
+        end_date = datetime.datetime.strptime(end_date_str, "%Y%m%dT%H%M%S")
         return {
             "safe_name": safe_name,
             "mission": mission,
             "product_type": product_type,
             "polarization": polarization,
             "start_date": start_date,
+            "end_date": end_date
         }
 
     def _read_one_listing(self, path: Path) -> pl.DataFrame:
@@ -162,8 +164,10 @@ class CatalogueUpdater:
             pl.lit(None, dtype=pl.Float32).alias("v10 ecmwf"),
             pl.col("start_date").alias("start date SAFE"),
             pl.lit(datetime.datetime.now()).alias("horodating"),
-            pl.lit(None, dtype=pl.Utf8).alias("polygon of the acquisition from CDSE"),
-            pl.lit(None, dtype=pl.Utf8).alias("S3path from CDSE"),
+            pl.lit(None, dtype=pl.Utf8).alias("polygon SLC"),      # placeholder
+            pl.lit(None, dtype=pl.Utf8).alias("polygon GRD"),
+            pl.lit(None, dtype=pl.Utf8).alias("S3path SLC"),
+            pl.lit(None, dtype=pl.Utf8).alias("S3path GRD"),
             pl.col("polarization").alias("polarization"),
             pl.col("mission").alias("unité"),
         ).select(list(SCHEMA.keys()))
@@ -189,8 +193,10 @@ class CatalogueUpdater:
             pl.lit(None, dtype=pl.Float32).alias("v10 ecmwf"),
             pl.col("start_date").alias("start date SAFE"),
             pl.lit(datetime.datetime.now()).alias("horodating"),
-            pl.lit(None, dtype=pl.Utf8).alias("polygon of the acquisition from CDSE"),
-            pl.lit(None, dtype=pl.Utf8).alias("S3path from CDSE"),
+            pl.lit(None, dtype=pl.Utf8).alias("polygon SLC"),      # placeholder
+            pl.lit(None, dtype=pl.Utf8).alias("polygon GRD"),
+            pl.lit(None, dtype=pl.Utf8).alias("S3path SLC"),
+            pl.lit(None, dtype=pl.Utf8).alias("S3path GRD"),
             pl.col("polarization").alias("polarization"),
             pl.col("mission").alias("unité"),
         ).select(list(SCHEMA.keys()))
@@ -204,6 +210,8 @@ class CatalogueUpdater:
         Link SLC and GRD products using two-step strategy:
         1. Local matching based on naming conventions and time window search
         2. CDSE fallback for orphans (using cdsodatacli)
+        3. Fetch polygons and S3 paths from CDSE
+        4. Check presence on Ifremer storage using s1ifr
         """
         logger.info("Linking SLC and GRD products...")
         
@@ -212,6 +220,13 @@ class CatalogueUpdater:
         
         # Step 2: CDSE fallback for rows still missing links
         df = self._cdse_fallback_link(df)
+        df = self._merge_linked_rows(df)
+        
+        # Step 3: Fetch polygons and S3 paths from CDSE
+        df = self._update_polygons_and_s3paths(df)
+        
+        # Step 4: Check presence on Ifremer storage
+        df = self._update_presence_columns(df, force=False)
         
         logger.info("SLC-GRD linking complete.")
         return df
@@ -614,10 +629,523 @@ class CatalogueUpdater:
         logger.info(f"Found {len(new_rows)} new SAFE entries.")
         return pl.DataFrame(new_rows, schema=SCHEMA)
 
-    # ---------- Placeholders for future implementation ----------
-    def update_presence_columns(self, df: pl.DataFrame, force: bool = False) -> pl.DataFrame:
+    def _merge_linked_rows(self, df: pl.DataFrame) -> pl.DataFrame:
+        """
+        For rows that have both SLC and GRD filled, merge column values according to rules.
+        """
+        logger.info("Merging linked SLC-GRD rows...")
+        
+        # Split polygon and S3path columns into SLC/GRD variants
+        df = self._split_geometry_columns(df)
+        
+        # Separate linked and unlinked rows
+        linked_rows = df.filter(
+            pl.col("SAFE SLC").is_not_null() & pl.col("SAFE GRD").is_not_null()
+        )
+        unlinked_rows = df.filter(
+            ~(pl.col("SAFE SLC").is_not_null() & pl.col("SAFE GRD").is_not_null())
+        )
+        
+        if linked_rows.height == 0:
+            logger.info("No linked rows to merge.")
+            return df
+        
+        logger.info(f"Found {linked_rows.height} rows with both SLC and GRD.")
+        logger.info(f"Keeping {unlinked_rows.height} unlinked rows unchanged.")
+        
+        # For dataset merging, we need to handle empty lists carefully.
+        # First, create a temporary column with all datasets concatenated
+        # Then explode, get unique, and aggregate back
+        
+        # Convert the linked rows to a list of dictionaries and process manually
+        # This is simpler and more reliable for this specific operation
+        rows = linked_rows.to_dicts()
+        
+        merged_rows = []
+        # Group by (SAFE SLC, SAFE GRD) pair
+        pairs = {}
+        for row in rows:
+            key = (row["SAFE SLC"], row["SAFE GRD"])
+            if key not in pairs:
+                pairs[key] = []
+            pairs[key].append(row)
+        
+        for (slc, grd), rows_list in pairs.items():
+            # Start with the first row as base
+            merged = rows_list[0].copy()
+            
+            # Merge datasets from all rows
+            all_datasets = set()
+            for r in rows_list:
+                datasets = r.get("dataset(s) d'appartenance", [])
+                if datasets:
+                    all_datasets.update(datasets)
+            merged["dataset(s) d'appartenance"] = list(all_datasets)
+            
+            # Merge meteo: take first non-null
+            for meteo_col in ["Hs WW3", "Tp WW3", "U10 ecmwf", "v10 ecmwf"]:
+                for r in rows_list:
+                    val = r.get(meteo_col)
+                    if val is not None:
+                        merged[meteo_col] = val
+                        break
+            
+            # start date: take the minimum (earliest)
+            start_dates = [r.get("start date SAFE") for r in rows_list if r.get("start date SAFE") is not None]
+            if start_dates:
+                merged["start date SAFE"] = min(start_dates)
+            
+            # horodating: take the maximum (most recent)
+            horodatings = [r.get("horodating") for r in rows_list if r.get("horodating") is not None]
+            if horodatings:
+                merged["horodating"] = max(horodatings)
+            
+            # polygon SLC/GRD: take first non-null
+            for poly_col in ["polygon SLC", "polygon GRD", "S3path SLC", "S3path GRD"]:
+                for r in rows_list:
+                    val = r.get(poly_col)
+                    if val is not None:
+                        merged[poly_col] = val
+                        break
+            
+            # SAFE OCN is always None
+            merged["SAFE OCN"] = None
+            
+            merged_rows.append(merged)
+        
+        # Convert back to DataFrame
+        merged_linked = pl.DataFrame(merged_rows, schema=SCHEMA)
+        
+        # Ensure both DataFrames have the same column order
+        unlinked_rows = unlinked_rows.select(merged_linked.columns)
+        
+        # Combine linked (merged) and unlinked rows
+        df = pl.concat([merged_linked, unlinked_rows], how="vertical_relaxed")
+        
+        logger.info(f"Merging complete. New shape: {df.shape}")
         return df
 
+    def _split_geometry_columns(self, df: pl.DataFrame) -> pl.DataFrame:
+        """
+        Split polygon and S3path into SLC-specific and GRD-specific columns.
+        This should be called BEFORE merging linked rows.
+        """
+        # Check if columns already exist
+        if "polygon SLC" in df.columns and "polygon GRD" in df.columns:
+            return df
+        
+        # Check if the original columns exist
+        has_polygon = "polygon of the acquisition from CDSE" in df.columns
+        has_s3path = "S3path from CDSE" in df.columns
+        
+        if not has_polygon and not has_s3path:
+            logger.debug("Geometry columns already split or not present. Skipping.")
+            return df
+        
+        # Create SLC-specific polygon column
+        if has_polygon:
+            df = df.with_columns(
+                pl.when(pl.col("SAFE SLC").is_not_null())
+                .then(pl.col("polygon of the acquisition from CDSE"))
+                .otherwise(None)
+                .alias("polygon SLC")
+            )
+            df = df.with_columns(
+                pl.when(pl.col("SAFE GRD").is_not_null())
+                .then(pl.col("polygon of the acquisition from CDSE"))
+                .otherwise(None)
+                .alias("polygon GRD")
+            )
+            df = df.drop(["polygon of the acquisition from CDSE"])
+        else:
+            # If original doesn't exist, create empty columns
+            df = df.with_columns([
+                pl.lit(None, dtype=pl.Utf8).alias("polygon SLC"),
+                pl.lit(None, dtype=pl.Utf8).alias("polygon GRD"),
+            ])
+        
+        if has_s3path:
+            df = df.with_columns(
+                pl.when(pl.col("SAFE SLC").is_not_null())
+                .then(pl.col("S3path from CDSE"))
+                .otherwise(None)
+                .alias("S3path SLC")
+            )
+            df = df.with_columns(
+                pl.when(pl.col("SAFE GRD").is_not_null())
+                .then(pl.col("S3path from CDSE"))
+                .otherwise(None)
+                .alias("S3path GRD")
+            )
+            df = df.drop(["S3path from CDSE"])
+        else:
+            df = df.with_columns([
+                pl.lit(None, dtype=pl.Utf8).alias("S3path SLC"),
+                pl.lit(None, dtype=pl.Utf8).alias("S3path GRD"),
+            ])
+        
+        logger.info("Geometry columns split into SLC and GRD variants.")
+        return df
+
+    def _update_polygons_and_s3paths(self, df: pl.DataFrame) -> pl.DataFrame:
+        """
+        Query CDSE to get polygon footprints and S3 paths for SAFE products that are missing this info.
+        Uses cdsodatacli.query.fetch_data with exact date ranges from the SAFE names.
+        Only queries products that don't already have polygon/S3path information.
+        """
+        logger.info("Fetching polygon footprints and S3 paths from CDSE for missing products...")
+        
+        try:
+            from cdsodatacli.query import fetch_data
+            import geopandas as gpd
+            import pandas as pd
+            import shapely
+            from shapely.geometry import box
+        except ImportError as e:
+            logger.warning(f"cdsodatacli or geopandas not installed: {e}. Skipping polygon fetch.")
+            return df
+        
+        # Identify products missing polygon or S3path information
+        missing_polygon_slc = df.filter(
+            pl.col("SAFE SLC").is_not_null() & pl.col("polygon SLC").is_null()
+        )
+        missing_polygon_grd = df.filter(
+            pl.col("SAFE GRD").is_not_null() & pl.col("polygon GRD").is_null()
+        )
+        missing_s3_slc = df.filter(
+            pl.col("SAFE SLC").is_not_null() & pl.col("S3path SLC").is_null()
+        )
+        missing_s3_grd = df.filter(
+            pl.col("SAFE GRD").is_not_null() & pl.col("S3path GRD").is_null()
+        )
+        
+        # Combine all missing products
+        missing_slc = set(missing_polygon_slc["SAFE SLC"].to_list()) | set(missing_s3_slc["SAFE SLC"].to_list())
+        missing_grd = set(missing_polygon_grd["SAFE GRD"].to_list()) | set(missing_s3_grd["SAFE GRD"].to_list())
+        
+        all_missing = list(missing_slc | missing_grd)
+        
+        if not all_missing:
+            logger.info("All products already have polygon and S3path information.")
+            return df
+        
+        logger.info(f"Found {len(all_missing)} products missing polygon or S3path information.")
+        
+        # Process in batches to avoid overwhelming the API
+        batch_size = 50
+        all_results = []
+        
+        for i in range(0, len(all_missing), batch_size):
+            batch_names = all_missing[i:i+batch_size]
+            logger.info(f"Processing batch {i//batch_size + 1}/{(len(all_missing)-1)//batch_size + 1} ({len(batch_names)} products)")
+            
+            records = []
+            for safe_name in batch_names:
+                try:
+                    # Use the existing parse_safe_name method
+                    parsed = self.parse_safe_name(safe_name)
+                    start_date = parsed["start_date"]
+                    end_date = parsed["end_date"]
+                    mission = parsed["mission"]
+                    product_type = parsed["product_type"]
+                    
+                    # Extract end date from the name
+                    name = safe_name.removesuffix(".SAFE")
+                    parts = name.split("_")
+                    
+                    # # Find the end timestamp: it's the part after the start date
+                    # if len(parts) >= 6:
+                    #     end_str = parts[5]  # YYYYMMDDTHHMMSS
+                    #     end_date = datetime.datetime.strptime(end_str, "%Y%m%dT%H%M%S")
+                    # else:
+                    #     end_date = start_date + datetime.timedelta(hours=1)
+                    #     logger.warning(f"Could not extract end date from {safe_name}, using start+1h")
+                    
+                    # Explicitly set the product type filter to match the product type
+                    # For SLC products, the product type is "SLC_" in CDSE
+                    # For GRD products, it's "GRD"
+                    if product_type.upper() == "SLC":
+                        cdse_product_type = "SLC"
+                        sensormode = "IW"
+                    elif product_type.upper() == "GRDH" or product_type.upper() == "GRD":
+                        cdse_product_type = "GRD"
+                        sensormode = "IW"
+                    else:
+                        cdse_product_type = None
+                        sensormode = "IW"
+                    
+                    records.append({
+                        "start_datetime": start_date,
+                        "end_datetime": end_date,
+                        "collection": "SENTINEL-1",
+                        "name": safe_name,  # exact name pattern
+                        "sensormode": sensormode,
+                        "producttype": cdse_product_type,  # Set product type explicitly
+                        "geometry": box(-180, -90, 180, 90),
+                    })
+                except Exception as e:
+                    logger.warning(f"Could not parse SAFE name {safe_name}: {e}")
+                    continue
+            
+            if not records:
+                continue
+            
+            gdf = gpd.GeoDataFrame(records, crs="EPSG:4326")
+            breakpoint()
+            # Add required id_query column if missing
+            if "id_query" not in gdf.columns:
+                gdf["id_query"] = [f"batch_{i}_{j}" for j in range(len(gdf))]
+            
+            try:
+                result_df = fetch_data(
+                    gdf=gdf,
+                    timedelta_slice=datetime.timedelta(days=1),
+                    top=1000,
+                    querymode="seq",
+                    display_tqdm=False,
+                )
+                if result_df is not None and not result_df.empty:
+                    all_results.append(result_df)
+                    logger.info(f"Retrieved {len(result_df)} products from CDSE for this batch.")
+                else:
+                    logger.warning(f"No products found in CDSE for batch.")
+            except Exception as e:
+                logger.error(f"Error querying CDSE for batch: {e}")
+                import traceback
+                logger.debug(traceback.format_exc())
+                continue
+        
+        if not all_results:
+            logger.warning("No results returned from CDSE.")
+            return df
+        
+        # Combine results
+        combined_results = pd.concat(all_results, ignore_index=True)
+        logger.info(f"Total retrieved {len(combined_results)} products from CDSE.")
+        
+        # Create lookup dictionaries
+        polygon_dict = {}
+        s3path_dict = {}
+        
+        for _, row in combined_results.iterrows():
+            safe_name = row.get("Name")
+            if safe_name:
+                if "geometry" in row and row.geometry is not None:
+                    polygon_dict[safe_name] = row.geometry.wkt
+                s3_path = row.get("S3path from CDSE") or row.get("DownloadUrl") or row.get("S3Path")
+                if s3_path:
+                    s3path_dict[safe_name] = s3_path
+        
+        logger.info(f"Got polygons for {len(polygon_dict)} products and S3 paths for {len(s3path_dict)} products.")
+        
+        # Log which products were found vs missing
+        found_slc = [name for name in missing_slc if name in polygon_dict]
+        found_grd = [name for name in missing_grd if name in polygon_dict]
+        missing_slc_after = [name for name in missing_slc if name not in polygon_dict]
+        missing_grd_after = [name for name in missing_grd if name not in polygon_dict]
+        
+        if missing_slc_after:
+            logger.warning(f"SLC products still missing polygons: {missing_slc_after}")
+        if missing_grd_after:
+            logger.warning(f"GRD products still missing polygons: {missing_grd_after}")
+        
+        # Update the DataFrame only for products that were missing
+        # Update polygon SLC
+        df = df.with_columns(
+            pl.when(
+                pl.col("SAFE SLC").is_not_null() & pl.col("polygon SLC").is_null()
+            )
+            .then(
+                pl.struct(["SAFE SLC"])
+                .map_elements(
+                    lambda x: polygon_dict.get(x["SAFE SLC"]) if x["SAFE SLC"] else None,
+                    return_dtype=pl.Utf8
+                )
+            )
+            .otherwise(pl.col("polygon SLC"))
+            .alias("polygon SLC")
+        )
+        
+        # Update polygon GRD
+        df = df.with_columns(
+            pl.when(
+                pl.col("SAFE GRD").is_not_null() & pl.col("polygon GRD").is_null()
+            )
+            .then(
+                pl.struct(["SAFE GRD"])
+                .map_elements(
+                    lambda x: polygon_dict.get(x["SAFE GRD"]) if x["SAFE GRD"] else None,
+                    return_dtype=pl.Utf8
+                )
+            )
+            .otherwise(pl.col("polygon GRD"))
+            .alias("polygon GRD")
+        )
+        
+        # Update S3path SLC
+        df = df.with_columns(
+            pl.when(
+                pl.col("SAFE SLC").is_not_null() & pl.col("S3path SLC").is_null()
+            )
+            .then(
+                pl.struct(["SAFE SLC"])
+                .map_elements(
+                    lambda x: s3path_dict.get(x["SAFE SLC"]) if x["SAFE SLC"] else None,
+                    return_dtype=pl.Utf8
+                )
+            )
+            .otherwise(pl.col("S3path SLC"))
+            .alias("S3path SLC")
+        )
+        
+        # Update S3path GRD
+        df = df.with_columns(
+            pl.when(
+                pl.col("SAFE GRD").is_not_null() & pl.col("S3path GRD").is_null()
+            )
+            .then(
+                pl.struct(["SAFE GRD"])
+                .map_elements(
+                    lambda x: s3path_dict.get(x["SAFE GRD"]) if x["SAFE GRD"] else None,
+                    return_dtype=pl.Utf8
+                )
+            )
+            .otherwise(pl.col("S3path GRD"))
+            .alias("S3path GRD")
+        )
+        
+        # Count how many were updated
+        updated_polygon_slc = df.filter(pl.col("SAFE SLC").is_not_null() & pl.col("polygon SLC").is_not_null()).height
+        updated_polygon_grd = df.filter(pl.col("SAFE GRD").is_not_null() & pl.col("polygon GRD").is_not_null()).height
+        updated_s3_slc = df.filter(pl.col("SAFE SLC").is_not_null() & pl.col("S3path SLC").is_not_null()).height
+        updated_s3_grd = df.filter(pl.col("SAFE GRD").is_not_null() & pl.col("S3path GRD").is_not_null()).height
+        
+        logger.info(f"Updated polygons for {updated_polygon_slc} SLC and {updated_polygon_grd} GRD products.")
+        logger.info(f"Updated S3 paths for {updated_s3_slc} SLC and {updated_s3_grd} GRD products.")
+        
+        return df
+    # ---------- Placeholders for future implementation ----------
+    def _update_presence_columns(self, df: pl.DataFrame, force: bool = False) -> pl.DataFrame:
+        """
+        Update presence columns by checking if SLC and GRD products exist on Ifremer storage.
+        Uses s1ifr.get_path_from_base_safe to check existence.
+        """
+        logger.info("Checking presence of products on Ifremer storage...")
+        
+        try:
+            from s1ifr.get_path_from_base_safe import get_path_from_base_safe
+        except ImportError as e:
+            logger.warning(f"s1ifr not installed: {e}. Skipping presence check.")
+            return df
+        
+        # Get s1ifr config file path from the main config
+        s1ifr_config_path = self.config.get("s1ifr-config-file", None)
+        if s1ifr_config_path:
+            logger.info(f"Using s1ifr config file: {s1ifr_config_path}")
+        
+        # Get rows that need presence information
+        if force:
+            # Check all products
+            slc_rows = df.filter(pl.col("SAFE SLC").is_not_null())
+            grd_rows = df.filter(pl.col("SAFE GRD").is_not_null())
+        else:
+            # Only check products that don't have presence information yet
+            slc_rows = df.filter(
+                pl.col("SAFE SLC").is_not_null() & pl.col("presence SLC").is_null()
+            )
+            grd_rows = df.filter(
+                pl.col("SAFE GRD").is_not_null() & pl.col("presence GRD").is_null()
+            )
+        
+        logger.info(f"Checking presence for {slc_rows.height} SLC and {grd_rows.height} GRD products.")
+        
+        # Check SLC products
+        slc_presence = {}
+        for row in slc_rows.to_dicts():
+            safe_name = row["SAFE SLC"]
+            try:
+                path = get_path_from_base_safe(
+                    safe_basename=safe_name,
+                    archive_name="datawork",  # default archive
+                    check_existence=True,
+                    config_path=s1ifr_config_path,
+                )
+                slc_presence[safe_name] = path if path else None
+                if path:
+                    logger.debug(f"SLC found: {safe_name} -> {path}")
+                else:
+                    logger.debug(f"SLC not found: {safe_name}")
+            except Exception as e:
+                logger.warning(f"Error checking presence for SLC {safe_name}: {e}")
+                slc_presence[safe_name] = None
+        
+        # Check GRD products
+        grd_presence = {}
+        for row in grd_rows.to_dicts():
+            safe_name = row["SAFE GRD"]
+            try:
+                path = get_path_from_base_safe(
+                    safe_basename=safe_name,
+                    archive_name="datawork",
+                    check_existence=True,
+                    config_path=s1ifr_config_path,
+                )
+                grd_presence[safe_name] = path if path else None
+                if path:
+                    logger.debug(f"GRD found: {safe_name} -> {path}")
+                else:
+                    logger.debug(f"GRD not found: {safe_name}")
+            except Exception as e:
+                logger.warning(f"Error checking presence for GRD {safe_name}: {e}")
+                grd_presence[safe_name] = None
+        
+        # Update SLC presence column
+        df = df.with_columns(
+            pl.when(
+                pl.col("SAFE SLC").is_not_null() & 
+                (pl.col("presence SLC").is_null() | pl.lit(force))
+            )
+            .then(
+                pl.struct(["SAFE SLC"])
+                .map_elements(
+                    lambda x: slc_presence.get(x["SAFE SLC"]) if x["SAFE SLC"] else None,
+                    return_dtype=pl.Utf8
+                )
+            )
+            .otherwise(pl.col("presence SLC"))
+            .alias("presence SLC")
+        )
+        
+        # Update GRD presence column
+        df = df.with_columns(
+            pl.when(
+                pl.col("SAFE GRD").is_not_null() & 
+                (pl.col("presence GRD").is_null() | pl.lit(force))
+            )
+            .then(
+                pl.struct(["SAFE GRD"])
+                .map_elements(
+                    lambda x: grd_presence.get(x["SAFE GRD"]) if x["SAFE GRD"] else None,
+                    return_dtype=pl.Utf8
+                )
+            )
+            .otherwise(pl.col("presence GRD"))
+            .alias("presence GRD")
+        )
+        
+        # Count how many were found
+        found_slc = df.filter(pl.col("SAFE SLC").is_not_null() & pl.col("presence SLC").is_not_null()).height
+        found_grd = df.filter(pl.col("SAFE GRD").is_not_null() & pl.col("presence GRD").is_not_null()).height
+        total_slc = df.filter(pl.col("SAFE SLC").is_not_null()).height
+        total_grd = df.filter(pl.col("SAFE GRD").is_not_null()).height
+        
+        if total_slc > 0:
+            logger.info(f"Found {found_slc}/{total_slc} SLC products on Ifremer storage ({found_slc/total_slc*100:.1f}%)")
+        if total_grd > 0:
+            logger.info(f"Found {found_grd}/{total_grd} GRD products on Ifremer storage ({found_grd/total_grd*100:.1f}%)")
+        
+        return df
+    
     def update_dataset_membership(self, df: pl.DataFrame) -> pl.DataFrame:
         return df
 

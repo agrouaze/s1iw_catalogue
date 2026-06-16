@@ -4,7 +4,7 @@ from typing import Dict, List
 
 import polars as pl
 
-SCHEMA: dict[str, pl.DataType] = {
+SCHEMA: Dict[str, pl.DataType] = {
     "SAFE SLC": pl.Utf8,
     "SAFE GRD": pl.Utf8,
     "SAFE OCN": pl.Utf8,
@@ -20,8 +20,10 @@ SCHEMA: dict[str, pl.DataType] = {
     "v10 ecmwf": pl.Float32,
     "start date SAFE": pl.Datetime,
     "horodating": pl.Datetime,
-    "polygon of the acquisition from CDSE": pl.Utf8,
-    "S3path from CDSE": pl.Utf8,
+    "polygon SLC": pl.Utf8,      # <-- changed
+    "polygon GRD": pl.Utf8,      # <-- changed
+    "S3path SLC": pl.Utf8,       # <-- changed
+    "S3path GRD": pl.Utf8,       # <-- changed
     "polarization": pl.Utf8,
     "unité": pl.Utf8,
 }
