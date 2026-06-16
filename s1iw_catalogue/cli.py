@@ -87,33 +87,33 @@ def stats(
     output: Optional[Path],
 ) -> None:
     """Print statistics about the catalogue."""
-    # Load catalogue DataFrame directly (no need for S1IWCatalogue instance)
+    import polars as pl
+
     df = pl.read_parquet(catalogue)
+
+    if dataset:
+        df = df.filter(pl.col("dataset(s) d'appartenance").list.contains(dataset))
+        if df.height == 0:
+            click.echo(f"No products found for dataset '{dataset}'")
+            return
+        click.echo(f"Filtered to dataset '{dataset}' ({df.height} products)\n")
+
     stats_obj = CatalogueStats(df)
+
     if output:
         stats_obj.to_json(output)
         click.echo(f"Statistics written to {output}")
     else:
-        # Print a summary to console
-        click.echo(f"Catalogue: {catalogue}")
-        click.echo(f"Total entries: {stats_obj.total_count()}")
-        counts = stats_obj.product_type_counts()
-        click.echo(f"  SLC: {counts.get('SLC', 0)}")
-        click.echo(f"  GRD: {counts.get('GRD', 0)}")
-        click.echo(f"  OCN: {counts.get('OCN', 0)}")
-        # Optionally show dataset counts
-        ds_counts = stats_obj.dataset_membership_counts()
-        if ds_counts:
-            click.echo("Dataset memberships:")
-            for ds, cnt in ds_counts.items():
-                click.echo(f"  {ds}: {cnt}")
-        
-        # Show presence stats if available
-        presence = stats_obj.presence_completeness()
-        if presence:
-            click.echo("\nPresence completeness:")
-            for col, pct in presence.items():
-                click.echo(f"  {col}: {pct:.1f}%")
+        # Print the summary string
+        click.echo(stats_obj.to_string())
+
+        if verbose:
+            click.echo("\n" + "-" * 60)
+            click.echo("VERBOSE OUTPUT - Sample rows")
+            click.echo("-" * 60)
+            sample_cols = ["SAFE SLC", "SAFE GRD", "dataset(s) d'appartenance", "polarization", "unité"]
+            sample_cols = [c for c in sample_cols if c in df.columns]
+            click.echo(df.select(sample_cols).head(5))
 
 
 @main.command()
