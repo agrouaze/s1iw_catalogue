@@ -1,6 +1,6 @@
 """Configuration management for s1iw_catalogue."""
 
-from typing import Any, Dict, Optional, Union
+from typing import Any, Dict, Optional
 
 from pathlib import Path
 

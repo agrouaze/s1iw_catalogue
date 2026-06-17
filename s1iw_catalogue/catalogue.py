@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Optional, Union
+from typing import Any, Optional
 
 import datetime
 from pathlib import Path
@@ -20,11 +20,11 @@ class S1IWCatalogue:
     def __init__(
         self,
         catalogue_path: str | Path,
-            config: str | Path | dict[str, Any] | None = None,
+        config: str | Path | dict[str, Any] | None = None,
     ) -> None:
         self._catalogue_path = Path(catalogue_path)
         self._config = load_config() if config is None else config
-        self._updater = CatalogueUpdater(self._config) # type: ignore[arg-type]
+        self._updater = CatalogueUpdater(self._config)  # type: ignore[arg-type]
 
     def create(self, output_path: str | Path | None = None) -> None:
         """Create a brand new catalogue from scratch."""
@@ -179,7 +179,7 @@ class S1IWCatalogue:
         dataset: str | None = None,
         verbose: bool = False,
         output: str | Path | None = None,
-    ) -> dict:
+        ) -> dict[str, Any]:
         # TODO: implement stats
         return {}
 
@@ -187,7 +187,7 @@ class S1IWCatalogue:
         # TODO: implement backup
         return Path()
 
-    def query(self, safe_name: str) -> dict | None:
+    def query(self, safe_name: str        ) -> dict[str, Any] | None:
         # TODO: implement query
         return None
 

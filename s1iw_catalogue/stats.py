@@ -1,6 +1,6 @@
 """Statistics generation for the catalogue."""
 
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, Optional
 
 import datetime
 import json
@@ -165,16 +165,12 @@ class CatalogueStats:
             "polarization_counts": self.polarization_counts(),
         }
         # Convert datetimes to strings for JSON serialization
-        if stats["latest_acquisition"][1]:
-            stats["latest_acquisition"] = (
-                stats["latest_acquisition"][0],
-                stats["latest_acquisition"][1].isoformat(),
-            )
-        if stats["latest_horodating"][1]:
-            stats["latest_horodating"] = (
-                stats["latest_horodating"][0],
-                stats["latest_horodating"][1].isoformat(),
-            )
+        latest_acq = stats["latest_acquisition"]
+        if latest_acq[1]:
+            stats["latest_acquisition"] = (latest_acq[0], latest_acq[1].isoformat())
+        latest_horo = stats["latest_horodating"]
+        if latest_horo[1]:
+            stats["latest_horodating"] = (latest_horo[0], latest_horo[1].isoformat())
         return stats
 
     def to_json(self, path: Path) -> None:

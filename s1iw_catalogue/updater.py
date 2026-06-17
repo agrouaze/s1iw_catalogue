@@ -1,6 +1,6 @@
 """Incremental update logic for the catalogue."""
 
-from typing import Dict, List, Optional, Tuple, Union
+from typing import Any, Dict, List, Optional, Tuple
 
 import datetime
 import logging
@@ -157,8 +157,8 @@ class CatalogueUpdater:
 
     def build_from_listings(
         self,
-            slc_listings: str | Path | list[str] | dict[str, Any],
-            grd_listings: str | Path | list[str] | dict[str, Any],
+        slc_listings: str | Path | list[str] | dict[str, Any],
+        grd_listings: str | Path | list[str] | dict[str, Any],
     ) -> pl.DataFrame:
         """
         Combine SLC and GRD listings into a catalogue DataFrame (no external queries).
@@ -486,7 +486,9 @@ class CatalogueUpdater:
         logger.info(f"SLC data_take_id samples: {slc_samples}")
 
         # Build dictionaries keyed by (mission, polarization, data_take_id) for exact matching
-        slc_dict: dict[tuple[str, str, str], list[tuple[str, datetime.datetime]]] = {}  # (mission, pol, data_take_id) -> list of (slc_name, start_time)
+        slc_dict: dict[tuple[str, str, str], list[tuple[str, datetime.datetime]]] = (
+            {}
+        )  # (mission, pol, data_take_id) -> list of (slc_name, start_time)
         for row in slc_rows.to_dicts():
             mission = row.get("unité", "")
             pol = row.get("polarization", "")
@@ -803,8 +805,8 @@ class CatalogueUpdater:
     def find_new_safe(
         self,
         existing_df: pl.DataFrame,
-            slc_listing: str | Path | list[str],
-            grd_listing: str | Path | list[str],
+        slc_listing: str | Path | list[str],
+        grd_listing: str | Path | list[str],
     ) -> pl.DataFrame:
         """Identify SAFE not yet present in the catalogue."""
         new_raw = self.build_from_listings(slc_listing, grd_listing)

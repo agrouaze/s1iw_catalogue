@@ -1,11 +1,11 @@
 """Parquet schema definition for the catalogue."""
 
-from typing import Dict, List, Any
+from typing import Any, Dict
 
 import polars as pl
 from polars.datatypes import DataType
 
-SCHEMA: Dict[str, DataType] = {
+SCHEMA: dict[str, Any] = {
     "SAFE SLC": pl.Utf8,
     "SAFE GRD": pl.Utf8,
     "SAFE OCN": pl.Utf8,
@@ -40,8 +40,9 @@ def validate_schema(df: pl.DataFrame) -> bool:
         if df[col].dtype != dtype:
             # For list columns, polars uses pl.List, but sometimes the inner type may differ
             # We'll be lenient for now
-            if dtype == pl.List(pl.Utf8) and df[col].dtype != pl.List(pl.Utf8):
-                return False
+            if isinstance(dtype, pl.List) and isinstance(df[col].dtype, pl.List):
+                continue
+            return False
 
 
 def create_empty_catalogue() -> pl.DataFrame:
