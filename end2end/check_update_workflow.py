@@ -27,7 +27,7 @@ from s1iw_catalogue.catalogue import S1IWCatalogue
 from s1iw_catalogue.config import load_config
 
 
-def print_catalogue_summary(df: pl.DataFrame, title: str):
+def print_catalogue_summary(df: pl.DataFrame, title: str) -> None:
     """Print a summary of the catalogue."""
     print(f"\n{'='*60}")
     print(f"{title}")
