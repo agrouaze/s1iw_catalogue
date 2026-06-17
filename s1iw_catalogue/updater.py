@@ -4,6 +4,7 @@ import datetime
 import logging
 import re
 from pathlib import Path
+import time
 from typing import List, Optional, Tuple, Union, Dict
 from collections import defaultdict
 import polars as pl
@@ -282,30 +283,80 @@ class CatalogueUpdater:
         logger.info(f"Total combined catalogue rows (before dedup): {combined.height}")
         return combined
     
+    def _log_catalogue_summary(self, df: pl.DataFrame, step_name: str) -> None:
+        """Log a summary of the catalogue state after each step."""
+        total = df.height
+        slc_count = df.filter(pl.col("SAFE SLC").is_not_null()).height
+        grd_count = df.filter(pl.col("SAFE GRD").is_not_null()).height
+        both_count = df.filter(
+            pl.col("SAFE SLC").is_not_null() & pl.col("SAFE GRD").is_not_null()
+        ).height
+        ocn_count = df.filter(pl.col("SAFE OCN").is_not_null()).height
+        
+        logger.info(f"  📊 {step_name}: {total} rows, {both_count} linked pairs, "
+                    f"{slc_count - both_count} SLC-only, {grd_count - both_count} GRD-only, {ocn_count} OCN")
+
     def link_slc_grd(self, df: pl.DataFrame) -> pl.DataFrame:
         """
-        Link SLC and GRD products using two-step strategy:
+        Link SLC and GRD products using multi-step strategy:
         1. Local matching based on naming conventions and time window search
         2. CDSE fallback for orphans (using cdsodatacli)
         3. Fetch polygons and S3 paths from CDSE
         4. Check presence on Ifremer storage using s1ifr
+        5. Check derived products (L1B, L1C, L2WAV) using s1ifr.paths_safe_product_family
         """
-        logger.info("Linking SLC and GRD products...")
-        
-        # Step 1: Local matching (in-memory DataFrame operations)
+        logger.info("=" * 60)
+        logger.info("🚀 Starting SLC-GRD linking pipeline...")
+        logger.info("=" * 60)
+        start_total = time.time()
+
+        # Step 1: Local matching
+        logger.info("\n📍 Step 1/5: Local SLC-GRD matching...")
+        start = time.time()
         df = self._local_link_slc_grd(df)
-        
+        elapsed = time.time() - start
+        self._log_catalogue_summary(df, "After local matching")
+        logger.info(f"✅ Step 1/5 completed in {elapsed:.1f}s")
+
         # Step 2: CDSE fallback for rows still missing links
+        logger.info("\n📍 Step 2/5: CDSE fallback for orphan products...")
+        start = time.time()
         df = self._cdse_fallback_link(df)
         df = self._merge_linked_rows(df)
-        
+        elapsed = time.time() - start
+        self._log_catalogue_summary(df, "After CDSE fallback")
+        logger.info(f"✅ Step 2/5 completed in {elapsed:.1f}s")
+
         # Step 3: Fetch polygons and S3 paths from CDSE
+        logger.info("\n📍 Step 3/5: Fetching polygons and S3 paths from CDSE...")
+        start = time.time()
         df = self._update_polygons_and_s3paths(df)
-        
+        elapsed = time.time() - start
+        self._log_catalogue_summary(df, "After polygon fetch")
+        logger.info(f"✅ Step 3/5 completed in {elapsed:.1f}s")
+
         # Step 4: Check presence on Ifremer storage
+        logger.info("\n📍 Step 4/5: Checking presence on Ifremer storage...")
+        start = time.time()
         df = self._update_presence_columns(df, force=False)
-        
-        logger.info("SLC-GRD linking complete.")
+        elapsed = time.time() - start
+        self._log_catalogue_summary(df, "After presence check")
+        logger.info(f"✅ Step 4/5 completed in {elapsed:.1f}s")
+
+        # Step 5: Check derived products (L1B, L1C, L2WAV)
+        logger.info("\n📍 Step 5/5: Checking derived products (L1B, L1C, L2WAV)...")
+        start = time.time()
+        df = self._update_derived_products(df)
+        elapsed = time.time() - start
+        self._log_catalogue_summary(df, "After derived products")
+        logger.info(f"✅ Step 5/5 completed in {elapsed:.1f}s")
+
+        total_elapsed = time.time() - start_total
+        logger.info("=" * 60)
+        logger.info(f"🏁 SLC-GRD linking complete in {total_elapsed:.1f}s")
+        logger.info(f"📊 Final catalogue shape: {df.shape}")
+        logger.info("=" * 60)
+
         return df
 
     def _local_link_slc_grd(self, df: pl.DataFrame) -> pl.DataFrame:
@@ -436,7 +487,7 @@ class CatalogueUpdater:
             if best_match is not None:
                 updates[grd_name] = best_match
                 matched_count += 1
-                logger.info(f"Local match: GRD {grd_name} -> SLC {best_match} "
+                logger.debug(f"Local match: GRD {grd_name} -> SLC {best_match} "
                         f"(data_take_id={grd_data_take_id}, time_diff={best_time_diff:.1f}s)")
             else:
                 # Check if there's any SLC with same data_take_id but time diff > 5s
@@ -1236,6 +1287,137 @@ class CatalogueUpdater:
         
         return df
     
+    def _update_derived_products(self, df: pl.DataFrame) -> pl.DataFrame:
+        """
+        Update derived product columns (L1B, L1C, L2WAV) using s1ifr.get_products_family.
+
+        Uses batch processing to efficiently check all SLCs at once.
+        """
+        logger.info("Checking derived products (L1B, L1C, L2WAV)...")
+
+        try:
+            from s1ifr.paths_safe_product_family import get_products_family
+            import pandas as pd
+        except ImportError as e:
+            logger.warning(f"s1ifr or pandas not installed: {e}. Skipping derived product check.")
+            return df
+
+        # Get s1ifr config file path from the main config
+        s1ifr_config_path = self.config.get("s1ifr-config-file", None)
+        if s1ifr_config_path:
+            logger.info(f"Using s1ifr config file: {s1ifr_config_path}")
+
+        # Get product versions from config or use defaults
+        product_versions = self.config.get("product_versions", {})
+        l1b_versions = product_versions.get("l1b", ["A21", "A23"])
+        l1c_versions = product_versions.get("l1c", ["B17", "B21"])
+        # L2WAV versions are handled by s1ifr defaults if not specified
+
+        logger.info(f"L1B versions to check: {l1b_versions}")
+        logger.info(f"L1C versions to check: {l1c_versions}")
+
+        # Get SLCs that need checking
+        # Check if any derived product column is NULL for this SLC
+        slc_rows = df.filter(
+            pl.col("SAFE SLC").is_not_null()
+        )
+
+        if slc_rows.height == 0:
+            logger.info("No SLC products found to check for derived products.")
+            return df
+
+        # Build list of columns to check
+        derived_cols = []
+        for v in l1b_versions:
+            derived_cols.append(f"presence L1B XSP {v}")
+        for v in l1c_versions:
+            derived_cols.append(f"presence L1C XSP {v}")
+        derived_cols.extend(["presence L2 WAV E11", "presence L2 WAV E13"])
+
+        # Only process SLCs that are missing at least one derived product
+        # Build condition: any derived column is NULL
+        condition = None
+        for col in derived_cols:
+            if col in df.columns:
+                cond = pl.col(col).is_null()
+                condition = cond if condition is None else condition | cond
+
+        if condition is not None:
+            slc_rows = slc_rows.filter(condition)
+        else:
+            # If none of the derived columns exist, check all SLCs
+            pass
+
+        if slc_rows.height == 0:
+            logger.info("All SLCs already have derived product information.")
+            return df
+
+        logger.info(f"Checking derived products for {slc_rows.height} SLC products.")
+
+        # Prepare pandas DataFrame for s1ifr
+        slc_list = slc_rows["SAFE SLC"].to_list()
+        pd_df = pd.DataFrame({"L1_SLC": slc_list})
+
+        try:
+            # Call get_products_family
+            result_df = get_products_family(
+                pd_df,
+                l1bversions=l1b_versions,
+                l1cversions=l1c_versions,
+                config=s1ifr_config_path,
+                disable_tqdm=True,
+            )
+            logger.info(f"Processed {len(result_df)} SLCs with get_products_family.")
+        except Exception as e:
+            logger.error(f"Error calling get_products_family: {e}")
+            import traceback
+            logger.debug(traceback.format_exc())
+            return df
+
+        # Build lookup dictionaries for each product column
+        lookup_dicts = {}
+        for col in result_df.columns:
+            if col != "L1_SLC":
+                lookup_dicts[col] = dict(zip(result_df["L1_SLC"], result_df[col]))
+
+        logger.info(f"Found derived products: {list(lookup_dicts.keys())}")
+
+        # Map s1ifr column names to catalogue column names
+        col_mapping = {}
+        for v in l1b_versions:
+            col_mapping[f"L1B_XSP_{v}"] = f"presence L1B XSP {v}"
+        for v in l1c_versions:
+            col_mapping[f"L1C_XSP_{v}"] = f"presence L1C XSP {v}"
+        col_mapping["L2_WAV_E11"] = "presence L2 WAV E11"
+        col_mapping["L2_WAV_E13"] = "presence L2 WAV E13"
+
+        # Update the DataFrame for each derived product column
+        for src_col, dst_col in col_mapping.items():
+            if src_col in lookup_dicts:
+                mapping = lookup_dicts[src_col]
+                # Update only rows that were missing this information
+                df = df.with_columns(
+                    pl.when(
+                        pl.col("SAFE SLC").is_not_null() &
+                        (pl.col(dst_col).is_null() if dst_col in df.columns else True)
+                    )
+                    .then(
+                        pl.struct(["SAFE SLC"])
+                        .map_elements(
+                            lambda x: mapping.get(x["SAFE SLC"], None) if x["SAFE SLC"] else None,
+                            return_dtype=pl.Utf8
+                        )
+                    )
+                    .otherwise(pl.col(dst_col) if dst_col in df.columns else None)
+                    .alias(dst_col)
+                )
+                updated_count = df.filter(
+                    pl.col("SAFE SLC").is_not_null() &
+                    pl.col(dst_col).is_not_null()
+                ).height
+                logger.info(f"  {dst_col}: found {updated_count} products")
+
+        return df
 
     def update_meteorology(self, df: pl.DataFrame, force: bool = False) -> pl.DataFrame:
         return df
