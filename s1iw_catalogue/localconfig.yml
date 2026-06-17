@@ -1,0 +1,15 @@
+paths:
+  reference_listings:
+    slc:
+      "hibou2": "assets/listings/dummy_slc_listing_hibou.txt"
+      "castor5": "assets/listings/dummy_slc_listing_castor.txt"
+    grd:
+      "zebra": "assets/listings/dummy_grd_listing_zebre.txt"
+  output:
+    catalogue: "/tmp/catalogue/latest/sentinel-1_exhaustive_IW_SAFE_working_material.parquet"
+s1ifr-config-file: /scale/project/lops-siam-airflow/configs_exploit/s1ifr/exploit_hpc.yml
+cdse_cache_dir: /tmp/cdse_cache
+product_versions:
+  l1b: ["A21", "A23"]
+  l1c: ["B17", "B21"]
+  l2wav: ["E11", "E13"]

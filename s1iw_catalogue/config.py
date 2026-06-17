@@ -83,7 +83,7 @@ def _deep_merge(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any
     return result
 
 
-class S1IWCatalogueConfig(dict):
+class S1IWCatalogueConfig(dict[str, Any]):
     """Typed configuration dictionary (placeholder)."""
 
     pass

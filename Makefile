@@ -30,7 +30,7 @@ formatting: codestyle
 #* Linting and testing
 .PHONY: test
 test:
-	PYTHONPATH=$(PYTHONPATH) pytest -c pyproject.toml --cov-report=html --cov=reference_iw_safe_ifr_collections tests/
+	PYTHONPATH=$(PYTHONPATH) pytest -c pyproject.toml --cov=tests --cov-report=html tests/
 	coverage-badge -o assets/images/coverage.svg -f
 
 .PHONY: check-codestyle

@@ -1,9 +1,10 @@
 """Statistics generation for the catalogue."""
 
+from typing import Any, Dict, List, Optional, Tuple
+
 import datetime
 import json
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
 
 import polars as pl
 
@@ -18,7 +19,7 @@ class CatalogueStats:
         """Total number of SAFE entries."""
         return self.df.height
 
-    def product_type_counts(self) -> Dict[str, int]:
+    def product_type_counts(self) -> dict[str, int]:
         """Return counts for SLC, GRD, OCN."""
         return {
             "SLC": self.df.filter(pl.col("SAFE SLC").is_not_null()).height,
@@ -26,7 +27,7 @@ class CatalogueStats:
             "OCN": self.df.filter(pl.col("SAFE OCN").is_not_null()).height,
         }
 
-    def product_type_percentages(self) -> Dict[str, float]:
+    def product_type_percentages(self) -> dict[str, float]:
         """Return percentages for SLC, GRD, OCN."""
         counts = self.product_type_counts()
         total = self.total_count()
@@ -34,7 +35,7 @@ class CatalogueStats:
             return {k: 0.0 for k in counts}
         return {k: v / total * 100.0 for k, v in counts.items()}
 
-    def dataset_membership_counts(self) -> Dict[str, int]:
+    def dataset_membership_counts(self) -> dict[str, int]:
         """Return number of SAFE per dataset."""
         if "dataset(s) d'appartenance" not in self.df.columns:
             return {}
@@ -42,7 +43,7 @@ class CatalogueStats:
         counts = exploded.group_by("dataset(s) d'appartenance").agg(pl.len())
         return dict(zip(counts["dataset(s) d'appartenance"], counts["len"]))
 
-    def presence_completeness(self, dataset: Optional[str] = None) -> Dict[str, float]:
+    def presence_completeness(self, dataset: str | None = None) -> dict[str, float]:
         """Compute percentages of non-null presence columns."""
         if dataset is not None:
             filtered = self.df.filter(
@@ -69,7 +70,7 @@ class CatalogueStats:
 
         return completeness
 
-    def latest_acquisition(self) -> Tuple[str, datetime.datetime]:
+    def latest_acquisition(self) -> tuple[str, datetime.datetime]:
         """Return (safe_name, start_date) of most recent acquisition."""
         if "start date SAFE" not in self.df.columns or self.df.height == 0:
             return ("", datetime.datetime(1970, 1, 1))
@@ -87,13 +88,11 @@ class CatalogueStats:
         dt = latest_row["start date SAFE"][0]
         return (safe_name, dt)
 
-    def latest_horodating(self) -> Tuple[str, datetime.datetime]:
+    def latest_horodating(self) -> tuple[str, datetime.datetime]:
         """Return (safe_name, horodating) of most recently updated row."""
         if "horodating" not in self.df.columns or self.df.height == 0:
             return ("", datetime.datetime(1970, 1, 1))
-        latest_row = self.df.filter(
-            pl.col("horodating") == self.df["horodating"].max()
-        )
+        latest_row = self.df.filter(pl.col("horodating") == self.df["horodating"].max())
         safe_name = None
         for col in ["SAFE SLC", "SAFE GRD", "SAFE OCN"]:
             val = latest_row[col][0]
@@ -116,14 +115,14 @@ class CatalogueStats:
         """Return number of rows where horodating is older than threshold days."""
         return self.stale_rows(days_threshold).height
 
-    def satellite_counts(self) -> Dict[str, int]:
+    def satellite_counts(self) -> dict[str, int]:
         """Return counts per satellite (unité)."""
         if "unité" not in self.df.columns:
             return {}
         counts = self.df.group_by("unité").agg(pl.len())
         return dict(zip(counts["unité"], counts["len"]))
 
-    def polarization_counts(self) -> Dict[str, int]:
+    def polarization_counts(self) -> dict[str, int]:
         """Return counts per polarization."""
         if "polarization" not in self.df.columns:
             return {}
@@ -148,7 +147,7 @@ class CatalogueStats:
             pl.col("SAFE GRD").is_not_null() & pl.col("SAFE SLC").is_null()
         ).height
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """Return all statistics as a dictionary."""
         stats = {
             "total_count": self.total_count(),

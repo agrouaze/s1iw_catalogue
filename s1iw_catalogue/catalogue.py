@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
-from pathlib import Path
 from typing import Optional, Union
+
 import datetime
+from pathlib import Path
 
 import polars as pl
 
@@ -18,14 +19,14 @@ class S1IWCatalogue:
 
     def __init__(
         self,
-        catalogue_path: Union[str, Path],
-        config: Optional[Union[str, Path, dict]] = None,
+        catalogue_path: str | Path,
+            config: str | Path | dict[str, Any] | None = None,
     ) -> None:
         self._catalogue_path = Path(catalogue_path)
         self._config = load_config() if config is None else config
-        self._updater = CatalogueUpdater(self._config)
+        self._updater = CatalogueUpdater(self._config) # type: ignore[arg-type]
 
-    def create(self, output_path: Optional[Union[str, Path]] = None) -> None:
+    def create(self, output_path: str | Path | None = None) -> None:
         """Create a brand new catalogue from scratch."""
         out_path = Path(output_path) if output_path else self._catalogue_path
         # Get listing configurations (can be string, list, or directory)
@@ -52,50 +53,56 @@ class S1IWCatalogue:
         - Rows that become linked: merge and update horodating
         """
         print(f"Updating catalogue at {self._catalogue_path}...")
-        
+
         # 1. Load existing catalogue
         if not self._catalogue_path.exists():
             print(f"Error: Catalogue file not found: {self._catalogue_path}")
             return
-        
+
         existing_df = pl.read_parquet(self._catalogue_path)
         print(f"Loaded existing catalogue with {existing_df.height} rows.")
-        
+
         # 2. Read new listings from config
         slc_listings = self._config["paths"]["reference_listings"]["slc"]
         grd_listings = self._config["paths"]["reference_listings"]["grd"]
-        
+
         # 3. Build new rows from listings (raw, not linked yet)
         print("Building new rows from listings...")
         new_df = self._updater.build_from_listings(slc_listings, grd_listings)
         print(f"Built {new_df.height} rows from listings.")
-        
+
         # 4. Identify existing SAFE names for lookup
-        existing_slc = set(existing_df.filter(pl.col("SAFE SLC").is_not_null())["SAFE SLC"].to_list())
-        existing_grd = set(existing_df.filter(pl.col("SAFE GRD").is_not_null())["SAFE GRD"].to_list())
-        
+        existing_slc = set(
+            existing_df.filter(pl.col("SAFE SLC").is_not_null())["SAFE SLC"].to_list()
+        )
+        existing_grd = set(
+            existing_df.filter(pl.col("SAFE GRD").is_not_null())["SAFE GRD"].to_list()
+        )
+
         # 5. Separate new rows into: existing (to merge) and truly new (to append)
         rows_to_merge = []  # rows that already exist (need dataset merge)
         rows_to_append = []  # rows that are completely new
-        
+
         for row in new_df.to_dicts():
             slc = row.get("SAFE SLC")
             grd = row.get("SAFE GRD")
-            
+
             # Check if this row already exists in the catalogue
             is_existing = (slc and slc in existing_slc) or (grd and grd in existing_grd)
-            
+
             if is_existing:
                 rows_to_merge.append(row)
             else:
                 rows_to_append.append(row)
-        
-        print(f"Found {len(rows_to_merge)} existing rows to merge, {len(rows_to_append)} new rows to append.")
-        
+
+        print(
+            f"Found {len(rows_to_merge)} existing rows to merge, {len(rows_to_append)} new rows to append."
+        )
+
         # 6. Merge existing rows: update dataset(s) and horodating
         if rows_to_merge:
             merge_df = pl.DataFrame(rows_to_merge, schema=existing_df.schema)
-            
+
             # For each existing row, merge dataset arrays and update horodating
             # We need to join on SAFE SLC or SAFE GRD
             # Create a unique key for joining
@@ -111,36 +118,34 @@ class S1IWCatalogue:
                 .otherwise(pl.col("SAFE GRD"))
                 .alias("_join_key")
             )
-            
+
             # Join to merge datasets
             merged = existing_df.join(
                 merge_df.select(["_join_key", "dataset(s) d'appartenance"]),
                 on="_join_key",
                 how="left",
-                suffix="_new"
+                suffix="_new",
             )
-            
+
             # Merge dataset arrays (UNION)
             merged = merged.with_columns(
                 pl.concat_list(
                     pl.col("dataset(s) d'appartenance"),
-                    pl.col("dataset(s) d'appartenance_new")
+                    pl.col("dataset(s) d'appartenance_new"),
                 )
                 .list.unique()
                 .alias("dataset(s) d'appartenance")
             )
             # Update horodating to now if datasets changed
             merged = merged.with_columns(
-                pl.when(
-                    pl.col("dataset(s) d'appartenance_new").list.len() > 0
-                )
+                pl.when(pl.col("dataset(s) d'appartenance_new").list.len() > 0)
                 .then(pl.lit(datetime.datetime.now()))
                 .otherwise(pl.col("horodating"))
                 .alias("horodating")
             )
             # Drop temporary columns
             merged = merged.drop(["_join_key", "dataset(s) d'appartenance_new"])
-            
+
             # Run the full pipeline on merged rows to update presence, polygons, etc.
             # Only for rows that were merged (their join key exists in both)
             # But we need to preserve rows that didn't change
@@ -149,7 +154,7 @@ class S1IWCatalogue:
             merged = self._updater.link_slc_grd(merged)
             existing_df = merged
             print(f"Merged {len(rows_to_merge)} existing rows.")
-        
+
         # 7. Append new rows: run full pipeline
         if rows_to_append:
             append_df = pl.DataFrame(rows_to_append, schema=existing_df.schema)
@@ -158,26 +163,31 @@ class S1IWCatalogue:
             # Append to existing
             existing_df = pl.concat([existing_df, append_df], how="vertical_relaxed")
             print(f"Appended {len(rows_to_append)} new rows.")
-        
+
         # 8. Deduplicate (just in case)
         existing_df = existing_df.unique()
-        
+
         # 9. Write atomic (temp file then rename)
         temp_path = self._catalogue_path.with_suffix(".parquet.tmp")
         existing_df.write_parquet(temp_path, compression="snappy")
         temp_path.rename(self._catalogue_path)
-        
+
         print(f"Update complete. Final catalogue has {existing_df.height} rows.")
 
-    def stats(self, dataset: Optional[str] = None, verbose: bool = False, output: Optional[Union[str, Path]] = None) -> dict:
+    def stats(
+        self,
+        dataset: str | None = None,
+        verbose: bool = False,
+        output: str | Path | None = None,
+    ) -> dict:
         # TODO: implement stats
         return {}
 
-    def backup(self, backup_dir: Optional[Union[str, Path]] = None) -> Path:
+    def backup(self, backup_dir: str | Path | None = None) -> Path:
         # TODO: implement backup
         return Path()
 
-    def query(self, safe_name: str) -> Optional[dict]:
+    def query(self, safe_name: str) -> dict | None:
         # TODO: implement query
         return None
 

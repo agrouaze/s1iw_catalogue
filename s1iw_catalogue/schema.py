@@ -1,10 +1,11 @@
 """Parquet schema definition for the catalogue."""
 
-from typing import Dict, List
+from typing import Dict, List, Any
 
 import polars as pl
+from polars.datatypes import DataType
 
-SCHEMA: Dict[str, pl.DataType] = {
+SCHEMA: Dict[str, DataType] = {
     "SAFE SLC": pl.Utf8,
     "SAFE GRD": pl.Utf8,
     "SAFE OCN": pl.Utf8,
@@ -20,10 +21,10 @@ SCHEMA: Dict[str, pl.DataType] = {
     "v10 ecmwf": pl.Float32,
     "start date SAFE": pl.Datetime,
     "horodating": pl.Datetime,
-    "polygon SLC": pl.Utf8,      # <-- changed
-    "polygon GRD": pl.Utf8,      # <-- changed
-    "S3path SLC": pl.Utf8,       # <-- changed
-    "S3path GRD": pl.Utf8,       # <-- changed
+    "polygon SLC": pl.Utf8,  # <-- changed
+    "polygon GRD": pl.Utf8,  # <-- changed
+    "S3path SLC": pl.Utf8,  # <-- changed
+    "S3path GRD": pl.Utf8,  # <-- changed
     "polarization": pl.Utf8,
     "unité": pl.Utf8,
 }
@@ -41,7 +42,6 @@ def validate_schema(df: pl.DataFrame) -> bool:
             # We'll be lenient for now
             if dtype == pl.List(pl.Utf8) and df[col].dtype != pl.List(pl.Utf8):
                 return False
-    return True
 
 
 def create_empty_catalogue() -> pl.DataFrame:
