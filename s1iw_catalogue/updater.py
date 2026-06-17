@@ -920,6 +920,7 @@ class CatalogueUpdater:
         Query CDSE to get polygon footprints and S3 paths for SAFE products that are missing this info.
         Uses cdsodatacli.query.fetch_data with exact date ranges from the SAFE names.
         Only queries products that don't already have polygon/S3path information.
+        Supports caching via cdse_cache_dir configuration.
         """
         logger.info("Fetching polygon footprints and S3 paths from CDSE for missing products...")
         
@@ -932,6 +933,16 @@ class CatalogueUpdater:
         except ImportError as e:
             logger.warning(f"cdsodatacli or geopandas not installed: {e}. Skipping polygon fetch.")
             return df
+        
+        # Get cache directory from config if available
+        cache_dir = self.config.get("cdse_cache_dir", None)
+        if cache_dir:
+            cache_dir = Path(cache_dir)
+            logger.info(f"Using CDSE cache directory: {cache_dir}")
+            # Ensure cache directory exists
+            cache_dir.mkdir(parents=True, exist_ok=True)
+        else:
+            logger.info("No CDSE cache directory configured. Cache disabled.")
         
         # Identify products missing polygon or S3path information
         missing_polygon_slc = df.filter(
@@ -977,18 +988,6 @@ class CatalogueUpdater:
                     mission = parsed["mission"]
                     product_type = parsed["product_type"]
                     
-                    # Extract end date from the name
-                    name = safe_name.removesuffix(".SAFE")
-                    parts = name.split("_")
-                    
-                    # # Find the end timestamp: it's the part after the start date
-                    # if len(parts) >= 6:
-                    #     end_str = parts[5]  # YYYYMMDDTHHMMSS
-                    #     end_date = datetime.datetime.strptime(end_str, "%Y%m%dT%H%M%S")
-                    # else:
-                    #     end_date = start_date + datetime.timedelta(hours=1)
-                    #     logger.warning(f"Could not extract end date from {safe_name}, using start+1h")
-                    
                     # Explicitly set the product type filter to match the product type
                     # For SLC products, the product type is "SLC_" in CDSE
                     # For GRD products, it's "GRD"
@@ -1024,11 +1023,13 @@ class CatalogueUpdater:
                 gdf["id_query"] = [f"batch_{i}_{j}" for j in range(len(gdf))]
             
             try:
+                # Pass cache_dir to fetch_data if configured
                 result_df = fetch_data(
                     gdf=gdf,
                     timedelta_slice=datetime.timedelta(days=1),
                     top=1000,
                     querymode="seq",
+                    cache_dir=str(cache_dir) if cache_dir else None,  # <-- Added cache_dir support
                     display_tqdm=False,
                 )
                 if result_df is not None and not result_df.empty:
