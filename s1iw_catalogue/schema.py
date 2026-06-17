@@ -43,6 +43,7 @@ def validate_schema(df: pl.DataFrame) -> bool:
             if isinstance(dtype, pl.List) and isinstance(df[col].dtype, pl.List):
                 continue
             return False
+    return True
 
 
 def create_empty_catalogue() -> pl.DataFrame:
