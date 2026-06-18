@@ -334,62 +334,65 @@ class CatalogueUpdater:
 
     def link_slc_grd(self, df: pl.DataFrame) -> pl.DataFrame:
         """
-        Link SLC and GRD products using multi-step strategy:
-        1. Local matching based on naming conventions and time window search
-        2. CDSE fallback for orphans (using cdsodatacli)
-        3. Fetch polygons and S3 paths from CDSE
-        4. Check presence on Ifremer storage using s1ifr
-        5. Check derived products (L1B, L1C, L2WAV) using s1ifr.paths_safe_product_family
+        Link SLC, GRD, and OCN products using multi-step strategy.
         """
         logger.info("=" * 60)
-        logger.info("🚀 Starting SLC-GRD linking pipeline...")
+        logger.info("🚀 Starting SLC-GRD-OCN linking pipeline...")
         logger.info("=" * 60)
         start_total = time.time()
 
-        # Step 1: Local matching
-        logger.info("\n📍 Step 1/5: Local SLC-GRD matching...")
+        # Step 1: Local SLC-GRD matching
+        logger.info("\n📍 Step 1/6: Local SLC-GRD matching...")
         start = time.time()
         df = self._local_link_slc_grd(df)  # type: ignore[assignment]
         elapsed = time.time() - start
         self._log_catalogue_summary(df, "After local matching")
-        logger.info(f"✅ Step 1/5 completed in {elapsed:.1f}s")
+        logger.info(f"✅ Step 1/6 completed in {elapsed:.1f}s")
 
-        # Step 2: CDSE fallback for rows still missing links
-        logger.info("\n📍 Step 2/5: CDSE fallback for orphan products...")
+        # Step 2: CDSE fallback for SLC-GRD orphans
+        logger.info("\n📍 Step 2/6: CDSE fallback for SLC-GRD orphans...")
         start = time.time()
         df = self._cdse_fallback_link(df)
         df = self._merge_linked_rows(df)
         elapsed = time.time() - start
         self._log_catalogue_summary(df, "After CDSE fallback")
-        logger.info(f"✅ Step 2/5 completed in {elapsed:.1f}s")
+        logger.info(f"✅ Step 2/6 completed in {elapsed:.1f}s")
 
-        # Step 3: Fetch polygons and S3 paths from CDSE
-        logger.info("\n📍 Step 3/5: Fetching polygons and S3 paths from CDSE...")
+        # Step 3: Link OCN to GRD (primary)
+        logger.info("\n📍 Step 3/6: Linking OCN to GRD products...")
+        start = time.time()
+        df = self._link_ocn_to_grd(df)
+        elapsed = time.time() - start
+        self._log_catalogue_summary(df, "After OCN-GRD linking")
+        logger.info(f"✅ Step 3/6 completed in {elapsed:.1f}s")
+
+        # Step 4: Fallback - Link OCN to SLC
+        logger.info("\n📍 Step 4/6: Fallback - Linking OCN to SLC...")
+        start = time.time()
+        df = self._link_ocn_to_slc(df)
+        elapsed = time.time() - start
+        self._log_catalogue_summary(df, "After OCN-SLC fallback")
+        logger.info(f"✅ Step 4/6 completed in {elapsed:.1f}s")
+
+        # Step 5: Fetch polygons and S3 paths from CDSE
+        logger.info("\n📍 Step 5/6: Fetching polygons and S3 paths from CDSE...")
         start = time.time()
         df = self._update_polygons_and_s3paths(df)
         elapsed = time.time() - start
         self._log_catalogue_summary(df, "After polygon fetch")
-        logger.info(f"✅ Step 3/5 completed in {elapsed:.1f}s")
+        logger.info(f"✅ Step 5/6 completed in {elapsed:.1f}s")
 
-        # Step 4: Check presence on Ifremer storage
-        logger.info("\n📍 Step 4/5: Checking presence on Ifremer storage...")
+        # Step 6: Check presence on Ifremer storage (including OCN)
+        logger.info("\n📍 Step 6/6: Checking presence on Ifremer storage...")
         start = time.time()
         df = self._update_presence_columns(df, force=False)
         elapsed = time.time() - start
         self._log_catalogue_summary(df, "After presence check")
-        logger.info(f"✅ Step 4/5 completed in {elapsed:.1f}s")
-
-        # Step 5: Check derived products (L1B, L1C, L2WAV)
-        logger.info("\n📍 Step 5/5: Checking derived products (L1B, L1C, L2WAV)...")
-        start = time.time()
-        df = self._update_derived_products(df)
-        elapsed = time.time() - start
-        self._log_catalogue_summary(df, "After derived products")
-        logger.info(f"✅ Step 5/5 completed in {elapsed:.1f}s")
+        logger.info(f"✅ Step 6/6 completed in {elapsed:.1f}s")
 
         total_elapsed = time.time() - start_total
         logger.info("=" * 60)
-        logger.info(f"🏁 SLC-GRD linking complete in {total_elapsed:.1f}s")
+        logger.info(f"🏁 SLC-GRD-OCN linking complete in {total_elapsed:.1f}s")
         logger.info(f"📊 Final catalogue shape: {df.shape}")
         logger.info("=" * 60)
 
@@ -713,7 +716,7 @@ class CatalogueUpdater:
                 grd_name = self._call_cdse_get_derived_grd(slc_name)
                 if grd_name:
                     updates_slc[slc_name] = grd_name
-                    logger.info(f"CDSE found derived GRD for {slc_name} -> {grd_name}")
+                    logger.debug(f"CDSE found derived GRD for {slc_name} -> {grd_name}")
                 else:
                     logger.warning(f"CDSE could not find GRD for {slc_name}")
             except Exception as e:
@@ -1287,7 +1290,7 @@ class CatalogueUpdater:
         self, df: pl.DataFrame, force: bool = False
     ) -> pl.DataFrame:
         """
-        Update presence columns by checking if SLC and GRD products exist on Ifremer storage.
+        Update presence columns by checking if SLC, GRD, and OCN products exist on Ifremer storage.
         Uses s1ifr.get_path_from_base_safe to check existence across all configured archives.
         """
         logger.info("Checking presence of products on Ifremer storage...")
@@ -1304,7 +1307,6 @@ class CatalogueUpdater:
             logger.info(f"Using s1ifr config file: {s1ifr_config_path}")
 
         # Determine which archives to check
-        # If we have the s1ifr config, we can read all archive names from it
         archive_names = ["datawork", "scale"]  # default fallback
 
         if s1ifr_config_path:
@@ -1313,13 +1315,10 @@ class CatalogueUpdater:
 
                 with open(s1ifr_config_path) as f:
                     s1ifr_config = yaml.safe_load(f)
-                # Get all top-level keys from the 'paths' section that are archive names
                 if "paths" in s1ifr_config:
-                    # Common archive names: datawork, scale, scratch
-                    # We could also look for any key that contains 'archive' or specific archive paths
                     potential_archives = ["datawork", "scale"]
-                    # Also check if there are other archive paths defined
                     for key in s1ifr_config["paths"].keys():
+<<<<<<< HEAD
                         if key not in potential_archives and isinstance(
                             s1ifr_config["paths"][key], dict
                         ):
@@ -1328,6 +1327,10 @@ class CatalogueUpdater:
                                 "archive" in k.lower()
                                 for k in s1ifr_config["paths"][key].keys()
                             ):
+=======
+                        if key not in potential_archives and isinstance(s1ifr_config["paths"][key], dict):
+                            if any("archive" in k.lower() for k in s1ifr_config["paths"][key].keys()):
+>>>>>>> origin/main
                                 potential_archives.append(key)
                     archive_names = potential_archives
                     logger.info(f"Found archives in s1ifr config: {archive_names}")
@@ -1340,6 +1343,7 @@ class CatalogueUpdater:
         if force:
             slc_rows = df.filter(pl.col("SAFE SLC").is_not_null())
             grd_rows = df.filter(pl.col("SAFE GRD").is_not_null())
+            ocn_rows = df.filter(pl.col("SAFE OCN").is_not_null())  # <-- ADDED
         else:
             slc_rows = df.filter(
                 pl.col("SAFE SLC").is_not_null() & pl.col("presence SLC").is_null()
@@ -1347,12 +1351,22 @@ class CatalogueUpdater:
             grd_rows = df.filter(
                 pl.col("SAFE GRD").is_not_null() & pl.col("presence GRD").is_null()
             )
+<<<<<<< HEAD
 
         logger.info(
             f"Checking presence for {slc_rows.height} SLC and {grd_rows.height} GRD products."
         )
 
         def find_product_path(safe_name: str, product_type: str) -> str | None:
+=======
+            ocn_rows = df.filter(  # <-- ADDED
+                pl.col("SAFE OCN").is_not_null() & pl.col("presence OCN").is_null()
+            )
+        
+        logger.info(f"Checking presence for {slc_rows.height} SLC, {grd_rows.height} GRD, and {ocn_rows.height} OCN products.")
+        
+        def find_product_path(safe_name: str, product_type: str) -> Optional[str]:
+>>>>>>> origin/main
             """Find product path by checking all archives sequentially."""
             for archive_name in archive_names:
                 try:
@@ -1384,7 +1398,17 @@ class CatalogueUpdater:
         for row in grd_rows.to_dicts():
             safe_name = row["SAFE GRD"]
             grd_presence[safe_name] = find_product_path(safe_name, "GRD")
+<<<<<<< HEAD
 
+=======
+        
+        # Check OCN products  # <-- ADDED
+        ocn_presence = {}
+        for row in ocn_rows.to_dicts():
+            safe_name = row["SAFE OCN"]
+            ocn_presence[safe_name] = find_product_path(safe_name, "OCN")
+        
+>>>>>>> origin/main
         # Update SLC presence column
         df = df.with_columns(
             pl.when(
@@ -1420,6 +1444,7 @@ class CatalogueUpdater:
             .otherwise(pl.col("presence GRD"))
             .alias("presence GRD")
         )
+<<<<<<< HEAD
 
         # Count how many were found
         found_slc = df.filter(
@@ -1431,15 +1456,51 @@ class CatalogueUpdater:
         total_slc = df.filter(pl.col("SAFE SLC").is_not_null()).height
         total_grd = df.filter(pl.col("SAFE GRD").is_not_null()).height
 
+=======
+        
+        # Update OCN presence column  # <-- ADDED
+        df = df.with_columns(
+            pl.when(
+                pl.col("SAFE OCN").is_not_null() & 
+                (pl.col("presence OCN").is_null() | pl.lit(force))
+            )
+            .then(
+                pl.struct(["SAFE OCN"])
+                .map_elements(
+                    lambda x: ocn_presence.get(x["SAFE OCN"]) if x["SAFE OCN"] else None,
+                    return_dtype=pl.Utf8
+                )
+            )
+            .otherwise(pl.col("presence OCN"))
+            .alias("presence OCN")
+        )
+        
+        # Count how many were found
+        found_slc = df.filter(pl.col("SAFE SLC").is_not_null() & pl.col("presence SLC").is_not_null()).height
+        found_grd = df.filter(pl.col("SAFE GRD").is_not_null() & pl.col("presence GRD").is_not_null()).height
+        found_ocn = df.filter(pl.col("SAFE OCN").is_not_null() & pl.col("presence OCN").is_not_null()).height  # <-- ADDED
+        
+        total_slc = df.filter(pl.col("SAFE SLC").is_not_null()).height
+        total_grd = df.filter(pl.col("SAFE GRD").is_not_null()).height
+        total_ocn = df.filter(pl.col("SAFE OCN").is_not_null()).height  # <-- ADDED
+        
+>>>>>>> origin/main
         if total_slc > 0:
             logger.info(
                 f"Found {found_slc}/{total_slc} SLC products on Ifremer storage ({found_slc/total_slc*100:.1f}%)"
             )
         if total_grd > 0:
+<<<<<<< HEAD
             logger.info(
                 f"Found {found_grd}/{total_grd} GRD products on Ifremer storage ({found_grd/total_grd*100:.1f}%)"
             )
 
+=======
+            logger.info(f"Found {found_grd}/{total_grd} GRD products on Ifremer storage ({found_grd/total_grd*100:.1f}%)")
+        if total_ocn > 0:  # <-- ADDED
+            logger.info(f"Found {found_ocn}/{total_ocn} OCN products on Ifremer storage ({found_ocn/total_ocn*100:.1f}%)")
+        
+>>>>>>> origin/main
         return df
 
     def _update_derived_products(self, df: pl.DataFrame) -> pl.DataFrame:
@@ -1576,6 +1637,171 @@ class CatalogueUpdater:
                 logger.info(f"  {dst_col}: found {updated_count} products")
 
         return df
+
+    def _link_ocn_to_grd(self, df: pl.DataFrame) -> pl.DataFrame:
+        """
+        Link OCN products to GRD products using CDSE.
+        Uses the GRD footprint for spatial filtering when available.
+        """
+        logger.info("Linking OCN to GRD products...")
+        
+        # Find GRD rows without OCN
+        grd_without_ocn = df.filter(
+            pl.col("SAFE GRD").is_not_null() & 
+            pl.col("SAFE OCN").is_null()
+        )
+        
+        if grd_without_ocn.height == 0:
+            logger.info("All GRD products already have OCN linked.")
+            return df
+        
+        logger.info(f"Attempting to link OCN for {grd_without_ocn.height} GRD products...")
+        
+        updates = {}
+        for row in grd_without_ocn.to_dicts():
+            grd_name = row["SAFE GRD"]
+            grd_polygon = row.get("polygon GRD")
+            
+            try:
+                # Use CDSE to find OCN for this GRD
+                ocn_name = self._call_cdse_get_ocn_from_grd(grd_name, grd_polygon)
+                if ocn_name:
+                    updates[grd_name] = ocn_name
+                    logger.debug(f"CDSE found OCN for GRD {grd_name} -> {ocn_name}")
+                else:
+                    logger.warning(f"CDSE could not find OCN for GRD {grd_name}")
+            except Exception as e:
+                logger.error(f"Error linking OCN for GRD {grd_name}: {e}")
+        
+        # Apply updates
+        for grd_name, ocn_name in updates.items():
+            df = df.with_columns(
+                pl.when(pl.col("SAFE GRD") == grd_name)
+                .then(pl.lit(ocn_name))
+                .otherwise(pl.col("SAFE OCN"))
+                .alias("SAFE OCN")
+            )
+        
+        logger.info(f"Linked OCN to {len(updates)} GRD products.")
+        return df
+
+    def _link_ocn_to_slc(self, df: pl.DataFrame) -> pl.DataFrame:
+        """
+        Fallback: Link OCN to SLC products when GRD link failed.
+        """
+        logger.info("Fallback: Linking OCN to SLC products...")
+        
+        # Find SLC rows without OCN
+        slc_without_ocn = df.filter(
+            pl.col("SAFE SLC").is_not_null() & 
+            pl.col("SAFE OCN").is_null()
+        )
+        
+        if slc_without_ocn.height == 0:
+            logger.info("No SLC products need OCN fallback linking.")
+            return df
+        
+        logger.info(f"Attempting to link OCN for {slc_without_ocn.height} SLC products...")
+        
+        # Get list of SLCs that already have OCN via GRD
+        # Use a different approach: collect the data first
+        linked_via_grd_names = set()
+        for row in df.filter(
+            pl.col("SAFE GRD").is_not_null() & 
+            pl.col("SAFE OCN").is_not_null()
+        ).to_dicts():
+            linked_via_grd_names.add(row.get("SAFE SLC"))
+        
+        updates = {}
+        for row in slc_without_ocn.to_dicts():
+            slc_name = row["SAFE SLC"]
+            
+            # Skip if this SLC already has a GRD with OCN
+            if slc_name in linked_via_grd_names:
+                continue
+            
+            slc_polygon = row.get("polygon SLC")
+            
+            try:
+                ocn_name = self._call_cdse_get_ocn_from_slc(slc_name, slc_polygon)
+                if ocn_name:
+                    updates[slc_name] = ocn_name
+                    logger.debug(f"CDSE found OCN for SLC {slc_name} -> {ocn_name}")
+                else:
+                    logger.warning(f"CDSE could not find OCN for SLC {slc_name}")
+            except Exception as e:
+                logger.error(f"Error linking OCN for SLC {slc_name}: {e}")
+        
+        # Apply updates
+        for slc_name, ocn_name in updates.items():
+            df = df.with_columns(
+                pl.when(pl.col("SAFE SLC") == slc_name)
+                .then(pl.lit(ocn_name))
+                .otherwise(pl.col("SAFE OCN"))
+                .alias("SAFE OCN")
+            )
+        
+        logger.info(f"Linked OCN to {len(updates)} SLC products.")
+        return df
+
+    
+
+    def _call_cdse_get_ocn_from_grd(self, grd_name: str, polygon_wkt: Optional[str] = None) -> Optional[str]:
+        """
+        Query CDSE to find OCN for a given GRD.
+        Uses polygon for spatial filtering if available.
+        """
+        try:
+            from cdsodatacli.scripts.match_s1_product_types import find_product_for_safe
+        except ImportError:
+            logger.warning("cdsodatacli not installed")
+            return None
+        
+        target_type = "OCN_"
+        delta_dist = defaultdict(int)
+        
+        try:
+            result = find_product_for_safe(
+                source_id=grd_name,
+                target_type=target_type,
+                logger=logger,
+                delta_distribution=delta_dist
+            )
+            if result and "target_name" in result:
+                return result["target_name"]
+        except Exception as e:
+            logger.error(f"CDSE query failed for {grd_name}: {e}")
+        
+        return None
+
+
+    def _call_cdse_get_ocn_from_slc(self, slc_name: str, polygon_wkt: Optional[str] = None) -> Optional[str]:
+        """
+        Query CDSE to find OCN for a given SLC.
+        Uses polygon for spatial filtering if available.
+        """
+        try:
+            from cdsodatacli.scripts.match_s1_product_types import find_product_for_safe
+        except ImportError:
+            logger.warning("cdsodatacli not installed")
+            return None
+        
+        target_type = "OCN_"
+        delta_dist = defaultdict(int)
+        
+        try:
+            result = find_product_for_safe(
+                source_id=slc_name,
+                target_type=target_type,
+                logger=logger,
+                delta_distribution=delta_dist
+            )
+            if result and "target_name" in result:
+                return result["target_name"]
+        except Exception as e:
+            logger.error(f"CDSE query failed for {slc_name}: {e}")
+        
+        return None
 
     def update_meteorology(self, df: pl.DataFrame, force: bool = False) -> pl.DataFrame:
         return df
