@@ -21,14 +21,14 @@ jobs:
   lint:
     name: Format
     runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v6
-        with:
-          fetch-depth: 0
+     steps:
+       - uses: actions/checkout@v6
+         with:
+           fetch-depth: 0
 
-      - uses: actions/setup-python@v6
-        with:
-          python-version: "3.x"
+       - uses: actions/setup-python@v6
+         with:
+           python-version: "3.x"
 
        - uses: astral-sh/setup-uv@v7
 
@@ -37,8 +37,8 @@ jobs:
 
        - uses: j178/prek-action@v2
 
-      - name: Run Pylint
-        run: uvx nox -s pylint -- --output-format=github
+       - name: Run Pylint
+         run: uvx nox -s pylint -- --output-format=github
 
   checks:
     name: Check Python ${{ matrix.python-version }} on ${{ matrix.runs-on }}
