@@ -52,6 +52,15 @@ dev = [
   "pytest-html",
   "pytest-cov",
 ]
+web = [
+    "fastapi",
+    "uvicorn[standard]",
+    "plotly",
+    "jinja2",
+    "python-multipart",
+    "shapely",
+    "geopandas",
+]
 
 [project.scripts]
 catalog-iw = "s1iw_catalogue.cli:main"

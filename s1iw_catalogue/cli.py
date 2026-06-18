@@ -161,5 +161,37 @@ def query(ctx: click.Context, catalogue: Path, safe_name: str) -> None:
             click.echo(f"  {key}: {value}")
 
 
+@main.command()
+@click.option("--host", default="127.0.0.1", help="Host to bind the web server to.")
+@click.option("--port", default=8649, type=int, help="Port to bind the web server to.")
+@click.option("--catalogue", "-c", required=True, type=click.Path(exists=True), help="Catalogue .parquet file to serve.")
+@click.option("--reload", is_flag=True, help="Enable auto-reload for development.")
+@click.pass_context
+def serve(
+    ctx: click.Context,
+    host: str,
+    port: int,
+    catalogue: Path,
+    reload: bool,
+) -> None:
+    """Launch web interface to explore the catalogue."""
+    import os
+    os.environ["S1IW_CATALOGUE_PATH"] = str(catalogue)
+    
+    click.echo(f"🚀 Starting web server at http://{host}:{port}")
+    click.echo(f"📁 Serving catalogue: {catalogue}")
+    click.echo("📖 API docs available at /docs")
+    
+    import uvicorn
+    from s1iw_catalogue.web.app import app
+    
+    uvicorn.run(
+        "s1iw_catalogue.web.app:app",
+        host=host,
+        port=port,
+        reload=reload,
+    )
+
+
 if __name__ == "__main__":
     main()
