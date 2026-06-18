@@ -1155,7 +1155,7 @@ class CatalogueUpdater:
     # ---------- Placeholders for future implementation ----------
     def _update_presence_columns(self, df: pl.DataFrame, force: bool = False) -> pl.DataFrame:
         """
-        Update presence columns by checking if SLC and GRD products exist on Ifremer storage.
+        Update presence columns by checking if SLC, GRD, and OCN products exist on Ifremer storage.
         Uses s1ifr.get_path_from_base_safe to check existence across all configured archives.
         """
         logger.info("Checking presence of products on Ifremer storage...")
@@ -1172,7 +1172,6 @@ class CatalogueUpdater:
             logger.info(f"Using s1ifr config file: {s1ifr_config_path}")
         
         # Determine which archives to check
-        # If we have the s1ifr config, we can read all archive names from it
         archive_names = ["datawork", "scale"]  # default fallback
         
         if s1ifr_config_path:
@@ -1180,15 +1179,10 @@ class CatalogueUpdater:
                 import yaml
                 with open(s1ifr_config_path, 'r') as f:
                     s1ifr_config = yaml.safe_load(f)
-                # Get all top-level keys from the 'paths' section that are archive names
                 if "paths" in s1ifr_config:
-                    # Common archive names: datawork, scale, scratch
-                    # We could also look for any key that contains 'archive' or specific archive paths
                     potential_archives = ["datawork", "scale"]
-                    # Also check if there are other archive paths defined
                     for key in s1ifr_config["paths"].keys():
                         if key not in potential_archives and isinstance(s1ifr_config["paths"][key], dict):
-                            # Check if this looks like an archive (has archive_esa or similar)
                             if any("archive" in k.lower() for k in s1ifr_config["paths"][key].keys()):
                                 potential_archives.append(key)
                     archive_names = potential_archives
@@ -1200,6 +1194,7 @@ class CatalogueUpdater:
         if force:
             slc_rows = df.filter(pl.col("SAFE SLC").is_not_null())
             grd_rows = df.filter(pl.col("SAFE GRD").is_not_null())
+            ocn_rows = df.filter(pl.col("SAFE OCN").is_not_null())  # <-- ADDED
         else:
             slc_rows = df.filter(
                 pl.col("SAFE SLC").is_not_null() & pl.col("presence SLC").is_null()
@@ -1207,8 +1202,11 @@ class CatalogueUpdater:
             grd_rows = df.filter(
                 pl.col("SAFE GRD").is_not_null() & pl.col("presence GRD").is_null()
             )
+            ocn_rows = df.filter(  # <-- ADDED
+                pl.col("SAFE OCN").is_not_null() & pl.col("presence OCN").is_null()
+            )
         
-        logger.info(f"Checking presence for {slc_rows.height} SLC and {grd_rows.height} GRD products.")
+        logger.info(f"Checking presence for {slc_rows.height} SLC, {grd_rows.height} GRD, and {ocn_rows.height} OCN products.")
         
         def find_product_path(safe_name: str, product_type: str) -> Optional[str]:
             """Find product path by checking all archives sequentially."""
@@ -1240,6 +1238,12 @@ class CatalogueUpdater:
         for row in grd_rows.to_dicts():
             safe_name = row["SAFE GRD"]
             grd_presence[safe_name] = find_product_path(safe_name, "GRD")
+        
+        # Check OCN products  # <-- ADDED
+        ocn_presence = {}
+        for row in ocn_rows.to_dicts():
+            safe_name = row["SAFE OCN"]
+            ocn_presence[safe_name] = find_product_path(safe_name, "OCN")
         
         # Update SLC presence column
         df = df.with_columns(
@@ -1275,16 +1279,38 @@ class CatalogueUpdater:
             .alias("presence GRD")
         )
         
+        # Update OCN presence column  # <-- ADDED
+        df = df.with_columns(
+            pl.when(
+                pl.col("SAFE OCN").is_not_null() & 
+                (pl.col("presence OCN").is_null() | pl.lit(force))
+            )
+            .then(
+                pl.struct(["SAFE OCN"])
+                .map_elements(
+                    lambda x: ocn_presence.get(x["SAFE OCN"]) if x["SAFE OCN"] else None,
+                    return_dtype=pl.Utf8
+                )
+            )
+            .otherwise(pl.col("presence OCN"))
+            .alias("presence OCN")
+        )
+        
         # Count how many were found
         found_slc = df.filter(pl.col("SAFE SLC").is_not_null() & pl.col("presence SLC").is_not_null()).height
         found_grd = df.filter(pl.col("SAFE GRD").is_not_null() & pl.col("presence GRD").is_not_null()).height
+        found_ocn = df.filter(pl.col("SAFE OCN").is_not_null() & pl.col("presence OCN").is_not_null()).height  # <-- ADDED
+        
         total_slc = df.filter(pl.col("SAFE SLC").is_not_null()).height
         total_grd = df.filter(pl.col("SAFE GRD").is_not_null()).height
+        total_ocn = df.filter(pl.col("SAFE OCN").is_not_null()).height  # <-- ADDED
         
         if total_slc > 0:
             logger.info(f"Found {found_slc}/{total_slc} SLC products on Ifremer storage ({found_slc/total_slc*100:.1f}%)")
         if total_grd > 0:
             logger.info(f"Found {found_grd}/{total_grd} GRD products on Ifremer storage ({found_grd/total_grd*100:.1f}%)")
+        if total_ocn > 0:  # <-- ADDED
+            logger.info(f"Found {found_ocn}/{total_ocn} OCN products on Ifremer storage ({found_ocn/total_ocn*100:.1f}%)")
         
         return df
     

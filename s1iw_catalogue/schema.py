@@ -1,6 +1,6 @@
 """Parquet schema definition for the catalogue."""
 
-from typing import Dict, List
+from typing import Dict
 
 import polars as pl
 
