@@ -21,14 +21,13 @@ SCHEMA: dict[str, Any] = {
     "v10 ecmwf": pl.Float32,
     "start date SAFE": pl.Datetime,
     "horodating": pl.Datetime,
-<<<<<<< HEAD
     "polygon SLC": pl.Utf8,
     "polygon GRD": pl.Utf8,
     "S3path SLC": pl.Utf8,
     "S3path GRD": pl.Utf8,
     "polarization": pl.Utf8,
     "unité": pl.Utf8,
-}
+
 
 
 def validate_schema(df: pl.DataFrame) -> bool:
