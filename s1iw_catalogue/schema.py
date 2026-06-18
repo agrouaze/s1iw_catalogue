@@ -40,9 +40,8 @@ def validate_schema(df: pl.DataFrame) -> bool:
         if df[col].dtype != dtype:
             # For list columns, polars uses pl.List, but sometimes the inner type may differ
             # We'll be lenient for now
-            if isinstance(dtype, pl.List) and isinstance(df[col].dtype, pl.List):
-                continue
-            return False
+            if not (isinstance(dtype, pl.List) and isinstance(df[col].dtype, pl.List)):
+                return False
     return True
 
 

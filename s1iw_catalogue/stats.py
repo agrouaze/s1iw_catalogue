@@ -165,11 +165,21 @@ class CatalogueStats:
             "polarization_counts": self.polarization_counts(),
         }
         # Convert datetimes to strings for JSON serialization
-        latest_acq = stats["latest_acquisition"]
-        if latest_acq[1]:
+        latest_acq = stats.get("latest_acquisition")
+        if (
+            latest_acq
+            and isinstance(latest_acq, tuple)
+            and len(latest_acq) == 2
+            and latest_acq[1]
+        ):
             stats["latest_acquisition"] = (latest_acq[0], latest_acq[1].isoformat())
-        latest_horo = stats["latest_horodating"]
-        if latest_horo[1]:
+        latest_horo = stats.get("latest_horodating")
+        if (
+            latest_horo
+            and isinstance(latest_horo, tuple)
+            and len(latest_horo) == 2
+            and latest_horo[1]
+        ):
             stats["latest_horodating"] = (latest_horo[0], latest_horo[1].isoformat())
         return stats
 

@@ -61,7 +61,7 @@ def print_catalogue_summary(df: pl.DataFrame, title: str) -> None:
     if "horodating" in df.columns:
         min_horo = df["horodating"].min()
         max_horo = df["horodating"].max()
-        print(f"\nhorodating range: {min_horo} to {max_horo}")
+        print(f"\nhorodating range: {min_horo!s} to {max_horo!s}")
 
 
 def main():
@@ -143,10 +143,10 @@ def main():
 
     # Check horodating updates
     print(
-        f"\nhorodating range - initial: {df1['horodating'].min()} to {df1['horodating'].max()}"
+        f"\nhorodating range - initial: {df1['horodating'].min()!s} to {df1['horodating'].max()!s}"
     )
     print(
-        f"horodating range - updated: {df2['horodating'].min()} to {df2['horodating'].max()}"
+        f"horodating range - updated: {df2['horodating'].min()!s} to {df2['horodating'].max()!s}"
     )
 
     # Check row count

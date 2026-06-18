@@ -157,8 +157,8 @@ class CatalogueUpdater:
 
     def build_from_listings(
         self,
-        slc_listings: str | Path | list[str] | dict[str, Any],
-        grd_listings: str | Path | list[str] | dict[str, Any],
+        slc_listings: str | Path | list[str | Path] | dict[str, Any],
+        grd_listings: str | Path | list[str | Path] | dict[str, Any],
     ) -> pl.DataFrame:
         """
         Combine SLC and GRD listings into a catalogue DataFrame (no external queries).
@@ -349,7 +349,7 @@ class CatalogueUpdater:
         # Step 1: Local matching
         logger.info("\n📍 Step 1/5: Local SLC-GRD matching...")
         start = time.time()
-        df = self._local_link_slc_grd(df)
+        df = self._local_link_slc_grd(df)  # type: ignore[assignment]
         elapsed = time.time() - start
         self._log_catalogue_summary(df, "After local matching")
         logger.info(f"✅ Step 1/5 completed in {elapsed:.1f}s")
@@ -395,7 +395,7 @@ class CatalogueUpdater:
 
         return df
 
-    def _local_link_slc_grd(self, df: pl.DataFrame) -> pl.DataFrame:
+    def _local_link_slc_grd(self, df: pl.DataFrame) -> pl.DataFrame | None:
         """
         Match SLC and GRD using data take ID (relative_orbit + orbit_number).
 
@@ -438,7 +438,7 @@ class CatalogueUpdater:
                 return match.group(1)
             return ""
 
-        def extract_start_time(safe_name: str) -> datetime.datetime:
+        def extract_start_time(safe_name: str) -> datetime.datetime | None:
             """Extract start datetime from SAFE name."""
             if not safe_name:
                 return None
@@ -454,8 +454,7 @@ class CatalogueUpdater:
                 try:
                     return datetime.datetime.strptime(matches[0], "%Y%m%dT%H%M%S")
                 except ValueError:
-                    return None  # type: ignore[return-value]
-            return None  # type: ignore[return-value]
+                    return None
 
         # Add columns to DataFrames
         grd_rows = grd_rows.with_columns(
@@ -497,10 +496,13 @@ class CatalogueUpdater:
 
             if mission and pol and data_take_id:
                 key = (mission, pol, data_take_id)
-                if key not in slc_dict:
-                    slc_dict[key] = []
+            if key not in slc_dict:
+                slc_dict[key] = []
                 slc_dict[key].append(
-                    {"safe_name": row["SAFE SLC"], "start_time": start_time}
+                    (
+                        row["SAFE SLC"],
+                        start_time if start_time else datetime.datetime.min,
+                    )
                 )
 
         updates = {}
@@ -529,8 +531,8 @@ class CatalogueUpdater:
             best_time_diff = 999.0
 
             for slc_info in slc_dict[key]:
-                slc_name = slc_info["safe_name"]
-                slc_start_time = slc_info["start_time"]
+                slc_name = slc_info[0]
+                slc_start_time = slc_info[1]
 
                 if grd_start_time is not None and slc_start_time is not None:
                     time_diff = abs((grd_start_time - slc_start_time).total_seconds())
@@ -549,7 +551,7 @@ class CatalogueUpdater:
             else:
                 # Check if there's any SLC with same data_take_id but time diff > 5s
                 if key in slc_dict:
-                    first_slc = slc_dict[key][0]["safe_name"]
+                    first_slc = slc_dict[key][0][0]
                     logger.warning(
                         f"GRD {grd_name}: No SLC within ±5s. "
                         f"Closest available SLC: {first_slc} (data_take_id={grd_data_take_id})"
@@ -762,10 +764,14 @@ class CatalogueUpdater:
                 logger=logger,
                 delta_distribution=delta_dist,
             )
-            if result and "target_name" in result:
-                return result["target_name"]
+            if result and isinstance(result, dict) and "target_name" in result:
+                return str(result["target_name"])
             else:
-                note = result.get("note", "unknown reason")
+                note = (
+                    result.get("note", "unknown reason")
+                    if isinstance(result, dict)
+                    else "unknown reason"
+                )
                 logger.warning(f"CDSE did not find SLC for {grd_name}: {note}")
                 return None
         except Exception as e:
@@ -792,10 +798,14 @@ class CatalogueUpdater:
                 logger=logger,
                 delta_distribution=delta_dist,
             )
-            if result and "target_name" in result:
-                return result["target_name"]
+            if result and isinstance(result, dict) and "target_name" in result:
+                return str(result["target_name"])
             else:
-                note = result.get("note", "unknown reason")
+                note = (
+                    result.get("note", "unknown reason")
+                    if isinstance(result, dict)
+                    else "unknown reason"
+                )
                 logger.warning(f"CDSE did not find GRD for {slc_name}: {note}")
                 return None
         except Exception as e:
@@ -809,7 +819,7 @@ class CatalogueUpdater:
         grd_listing: str | Path | list[str],
     ) -> pl.DataFrame:
         """Identify SAFE not yet present in the catalogue."""
-        new_raw = self.build_from_listings(slc_listing, grd_listing)
+        new_raw = self.build_from_listings(slc_listing if isinstance(slc_listing, (str, Path, list, dict)) else [], grd_listing if isinstance(grd_listing, (str, Path, list, dict)) else [])  # type: ignore[arg-type]
         if existing_df.height == 0:
             return new_raw
 
@@ -867,7 +877,7 @@ class CatalogueUpdater:
 
         merged_rows = []
         # Group by (SAFE SLC, SAFE GRD) pair
-        pairs: dict[str, list[str]] = {}
+        pairs: dict[tuple[str, str], list[dict[str, Any]]] = {}
         for row in rows:
             key = (row["SAFE SLC"], row["SAFE GRD"])
             if key not in pairs:
@@ -901,7 +911,7 @@ class CatalogueUpdater:
                 if r.get("start date SAFE") is not None
             ]
             if start_dates:
-                merged["start date SAFE"] = min(start_dates)
+                merged["start date SAFE"] = min(d for d in start_dates if d is not None)
 
             # horodating: take the maximum (most recent)
             horodatings = [
@@ -910,7 +920,7 @@ class CatalogueUpdater:
                 if r.get("horodating") is not None
             ]
             if horodatings:
-                merged["horodating"] = max(horodatings)
+                merged["horodating"] = max(d for d in horodatings if d is not None)
 
             # polygon SLC/GRD: take first non-null
             for poly_col in ["polygon SLC", "polygon GRD", "S3path SLC", "S3path GRD"]:

@@ -30,8 +30,8 @@ class S1IWCatalogue:
         """Create a brand new catalogue from scratch."""
         out_path = Path(output_path) if output_path else self._catalogue_path
         # Get listing configurations (can be string, list, or directory)
-        slc_listings = self._config["paths"]["reference_listings"]["slc"]
-        grd_listings = self._config["paths"]["reference_listings"]["grd"]
+        slc_listings = self._config.get("paths", {}).get("reference_listings", {}).get("slc", {})  # type: ignore[union-attr]
+        grd_listings = self._config.get("paths", {}).get("reference_listings", {}).get("grd", {})  # type: ignore[union-attr]
         # Build catalogue from listings
         df = self._updater.build_from_listings(slc_listings, grd_listings)
         df = self._updater.link_slc_grd(df)
@@ -63,8 +63,8 @@ class S1IWCatalogue:
         print(f"Loaded existing catalogue with {existing_df.height} rows.")
 
         # 2. Read new listings from config
-        slc_listings = self._config["paths"]["reference_listings"]["slc"]
-        grd_listings = self._config["paths"]["reference_listings"]["grd"]
+        slc_listings = self._config.get("paths", {}).get("reference_listings", {}).get("slc", {})  # type: ignore[union-attr]
+        grd_listings = self._config.get("paths", {}).get("reference_listings", {}).get("grd", {})  # type: ignore[union-attr]
 
         # 3. Build new rows from listings (raw, not linked yet)
         print("Building new rows from listings...")
@@ -179,7 +179,7 @@ class S1IWCatalogue:
         dataset: str | None = None,
         verbose: bool = False,
         output: str | Path | None = None,
-        ) -> dict[str, Any]:
+    ) -> dict[str, Any]:
         # TODO: implement stats
         return {}
 
@@ -187,7 +187,7 @@ class S1IWCatalogue:
         # TODO: implement backup
         return Path()
 
-    def query(self, safe_name: str        ) -> dict[str, Any] | None:
+    def query(self, safe_name: str) -> dict[str, Any] | None:
         # TODO: implement query
         return None
 
