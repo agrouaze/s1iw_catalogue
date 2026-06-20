@@ -1,0 +1,103 @@
+{% extends "base.html" %}
+
+{% block title %}Browse Catalogue{% endblock %}
+
+{% block extra_head %}
+<script src="https://cdn.plot.ly/plotly-2.27.0.min.js"></script>
+<link rel="stylesheet" href="/static/css/browse.css">
+{% endblock %}
+
+{% block content %}
+<div class="browse-container">
+    <h1>🔍 Browse Catalogue</h1>
+    <p class="subtitle">Explore products with filters and visualizations</p>
+
+    <!-- Filters -->
+    <section class="filters-section">
+        <form id="filter-form">
+            <div class="filter-row">
+                <div class="filter-group">
+                    <label>SAFE SLC</label>
+                    <input type="text" id="slc-filter" placeholder="Partial match">
+                </div>
+                <div class="filter-group">
+                    <label>SAFE GRD</label>
+                    <input type="text" id="grd-filter" placeholder="Partial match">
+                </div>
+                <div class="filter-group">
+                    <label>Dataset</label>
+                    <select id="dataset-filter" multiple>
+                        <option value="hibou2">hibou2</option>
+                        <option value="castor5">castor5</option>
+                        <option value="zebra">zebra</option>
+                        <option value="lion">lion</option>
+                    </select>
+                </div>
+            </div>
+            <div class="filter-row">
+                <div class="filter-group">
+                    <label>Polarization</label>
+                    <select id="polarization-filter" multiple>
+                        <option value="1SDV">1SDV</option>
+                        <option value="1SSV">1SSV</option>
+                        <option value="1SDH">1SDH</option>
+                        <option value="1SSH">1SSH</option>
+                    </select>
+                </div>
+                <div class="filter-group">
+                    <label>Satellite</label>
+                    <select id="satellite-filter" multiple>
+                        <option value="S1A">S1A</option>
+                        <option value="S1B">S1B</option>
+                        <option value="S1C">S1C</option>
+                        <option value="S1D">S1D</option>
+                    </select>
+                </div>
+                <div class="filter-group">
+                    <label>Date range</label>
+                    <input type="date" id="date-start">
+                    <input type="date" id="date-end">
+                </div>
+                <div class="filter-group">
+                    <button type="submit">Apply Filters</button>
+                    <button type="reset">Reset</button>
+                </div>
+            </div>
+        </form>
+    </section>
+
+    <!-- Visualizations Grid -->
+    <section class="viz-grid">
+        <div class="viz-item" id="map-container">
+            <h3>🌍 Footprints</h3>
+            <div id="map-plot"></div>
+        </div>
+        <div class="viz-item" id="daily-container">
+            <h3>📅 Daily Acquisitions</h3>
+            <div id="daily-plot"></div>
+        </div>
+        <div class="viz-item" id="pie-container">
+            <h3>📊 Polarization & Satellite</h3>
+            <div id="pie-plot"></div>
+        </div>
+        <div class="viz-item" id="hs-tp-container">
+            <h3>🌊 Hs vs Tp Heatmap</h3>
+            <div id="hs-tp-plot"></div>
+        </div>
+    </section>
+
+    <!-- Results Table -->
+    <section class="results-section">
+        <h2>📋 Filtered Results</h2>
+        <div id="results-table"></div>
+        <div id="pagination">
+            <button id="prev-page">Previous</button>
+            <span id="page-info">Page 1</span>
+            <button id="next-page">Next</button>
+        </div>
+    </section>
+</div>
+
+<script src="/static/js/filters.js"></script>
+<script src="/static/js/browse.js"></script>
+{% endblock %}

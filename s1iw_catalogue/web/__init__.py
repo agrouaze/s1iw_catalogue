@@ -5,5 +5,6 @@ Sentinel-1 IW catalogues with interactive visualizations.
 """
 
 from s1iw_catalogue.web.app import app
+from s1iw_catalogue.web.template_engine import get_templates, CustomTemplates
 
-__all__ = ["app"]
+__all__ = ["app", "get_templates", "CustomTemplates"]

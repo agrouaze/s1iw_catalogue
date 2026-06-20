@@ -5,24 +5,32 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>{% block title %}s1iw_catalogue{% endblock %}</title>
     <link rel="stylesheet" href="/static/css/style.css">
+    <script src="https://cdn.plot.ly/plotly-2.27.0.min.js"></script>
     {% block extra_head %}{% endblock %}
 </head>
 <body>
     <nav class="navbar">
         <div class="nav-container">
-            <a href="/" class="nav-brand">🛰️ s1iw_catalogue</a>
+            <a href="/" class="nav-brand">
+                <span class="logo">🛰️</span>
+                s1iw_catalogue
+            </a>
             <div class="nav-links">
-                <a href="/" class="nav-link">Home</a>
-                <a href="/browse" class="nav-link">Browse</a>
+                <a href="/" class="nav-link {% if request.url.path == '/' %}active{% endif %}">Dashboard</a>
+                <a href="/browse" class="nav-link {% if request.url.path == '/browse' %}active{% endif %}">Browse</a>
+                <a href="/docs" class="nav-link">API</a>
             </div>
         </div>
     </nav>
+
     <main class="container">
         {% block content %}{% endblock %}
     </main>
-    <footer>
+
+    <footer class="footer">
         <p>s1iw_catalogue v0.1.0 &bull; Powered by FastAPI + Plotly</p>
     </footer>
+
     <script src="/static/js/main.js"></script>
     {% block extra_scripts %}{% endblock %}
 </body>

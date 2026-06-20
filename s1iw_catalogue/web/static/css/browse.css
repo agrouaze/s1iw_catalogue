@@ -1,0 +1,38 @@
+/* Specific styles for browse page */
+#map-plot, #daily-plot, #pie-plot, #hs-tp-plot {
+    height: 300px;
+    width: 100%;
+}
+
+.results-section {
+    background: white;
+    border-radius: 8px;
+    padding: 20px;
+    box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+}
+
+#pagination {
+    display: flex;
+    justify-content: center;
+    gap: 15px;
+    margin-top: 15px;
+    align-items: center;
+}
+
+#pagination button {
+    padding: 5px 15px;
+    background: var(--primary);
+    color: white;
+    border: none;
+    border-radius: 4px;
+    cursor: pointer;
+}
+
+#pagination button:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
+#page-info {
+    font-size: 0.9rem;
+}
