@@ -29,7 +29,6 @@ class MapRequest(BaseModel):
     filter: FilterRequest = Field(..., description="Filter criteria")
     max_polygons: int = Field(100, ge=1, le=500, description="Max number of polygons to return")
 
-
 class HeatmapRequest(BaseModel):
     """Request model for heatmap data."""
     
