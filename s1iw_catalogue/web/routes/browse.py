@@ -18,72 +18,120 @@ router = APIRouter()
 
 def apply_filters(df: pl.DataFrame, filter_req: FilterRequest) -> pl.DataFrame:
     """Apply filters to catalogue DataFrame."""
-    if filter_req.slc_name:
-        df = df.filter(pl.col("SAFE SLC").str.contains(filter_req.slc_name))
-    
-    if filter_req.grd_name:
-        df = df.filter(pl.col("SAFE GRD").str.contains(filter_req.grd_name))
-    
-    if filter_req.ocn_name:
-        df = df.filter(pl.col("SAFE OCN").str.contains(filter_req.ocn_name))
-    
-    if filter_req.datasets:
-        # Filter rows where dataset array contains any of the selected datasets
-        df = df.filter(
-            pl.col("dataset(s) d'appartenance").list.overlaps(filter_req.datasets)
-        )
-    
-    if filter_req.polarization:
-        df = df.filter(pl.col("polarization").is_in(filter_req.polarization))
-    
-    if filter_req.satellites:
-        df = df.filter(pl.col("unité").is_in(filter_req.satellites))
-    
-    if filter_req.date_start:
-        df = df.filter(pl.col("start date SAFE") >= filter_req.date_start)
-    
-    if filter_req.date_end:
-        df = df.filter(pl.col("start date SAFE") <= filter_req.date_end)
-    
-    if filter_req.has_slc is True:
-        df = df.filter(pl.col("presence SLC").is_not_null())
-    elif filter_req.has_slc is False:
-        df = df.filter(pl.col("presence SLC").is_null())
-    
-    if filter_req.has_grd is True:
-        df = df.filter(pl.col("presence GRD").is_not_null())
-    elif filter_req.has_grd is False:
-        df = df.filter(pl.col("presence GRD").is_null())
-    
-    if filter_req.has_ocn is True:
-        df = df.filter(pl.col("presence OCN").is_not_null())
-    elif filter_req.has_ocn is False:
-        df = df.filter(pl.col("presence OCN").is_null())
-    
-    return df
+    try:
+        # SAFE name filters (partial match)
+        if filter_req.slc_name:
+            if "SAFE SLC" in df.columns:
+                df = df.filter(pl.col("SAFE SLC").str.contains(filter_req.slc_name))
+        
+        if filter_req.grd_name:
+            if "SAFE GRD" in df.columns:
+                df = df.filter(pl.col("SAFE GRD").str.contains(filter_req.grd_name))
+        
+        if filter_req.ocn_name:
+            if "SAFE OCN" in df.columns:
+                df = df.filter(pl.col("SAFE OCN").str.contains(filter_req.ocn_name))
+        
+        # Dataset filter - check if any selected dataset is in the list
+        if filter_req.datasets and len(filter_req.datasets) > 0:
+            if "dataset(s) d'appartenance" in df.columns:
+                # Use list.contains with any() to check overlap
+                # Create a condition: for any dataset in the list, check if it's in the array
+                # Polars: list.contains(element) returns a boolean expression
+                # We need to check if ANY of the selected datasets are in the list
+                condition = pl.lit(False)
+                for dataset in filter_req.datasets:
+                    condition = condition | pl.col("dataset(s) d'appartenance").list.contains(dataset)
+                df = df.filter(condition)
+        
+        # Polarization filter
+        if filter_req.polarization and len(filter_req.polarization) > 0:
+            if "polarization" in df.columns:
+                df = df.filter(pl.col("polarization").is_in(filter_req.polarization))
+        
+        # Satellite filter
+        if filter_req.satellites and len(filter_req.satellites) > 0:
+            if "unité" in df.columns:
+                df = df.filter(pl.col("unité").is_in(filter_req.satellites))
+        
+        # Date range filters
+        if filter_req.date_start:
+            if "start date SAFE" in df.columns:
+                df = df.filter(pl.col("start date SAFE") >= filter_req.date_start)
+        
+        if filter_req.date_end:
+            if "start date SAFE" in df.columns:
+                df = df.filter(pl.col("start date SAFE") <= filter_req.date_end)
+        
+        # Presence filters
+        if filter_req.has_slc is True:
+            if "presence SLC" in df.columns:
+                df = df.filter(pl.col("presence SLC").is_not_null())
+        elif filter_req.has_slc is False:
+            if "presence SLC" in df.columns:
+                df = df.filter(pl.col("presence SLC").is_null())
+        
+        if filter_req.has_grd is True:
+            if "presence GRD" in df.columns:
+                df = df.filter(pl.col("presence GRD").is_not_null())
+        elif filter_req.has_grd is False:
+            if "presence GRD" in df.columns:
+                df = df.filter(pl.col("presence GRD").is_null())
+        
+        if filter_req.has_ocn is True:
+            if "presence OCN" in df.columns:
+                df = df.filter(pl.col("presence OCN").is_not_null())
+        elif filter_req.has_ocn is False:
+            if "presence OCN" in df.columns:
+                df = df.filter(pl.col("presence OCN").is_null())
+        
+        return df
+    except Exception as e:
+        import logging
+        import traceback
+        logger = logging.getLogger(__name__)
+        logger.error(f"Error in apply_filters: {e}")
+        logger.error(traceback.format_exc())
+        raise
+
+
+import logging
+import traceback
+
+logger = logging.getLogger(__name__)
 
 
 @router.post("/filter")
 async def filter_catalogue(request: FilterRequest) -> Dict[str, Any]:
     """Filter catalogue entries based on criteria."""
-    if not catalogue_manager.is_loaded():
-        raise HTTPException(status_code=503, detail="Catalogue not loaded")
-    
-    df = apply_filters(catalogue_manager.df, request)
-    
-    # Select columns to return
-    columns = ["SAFE SLC", "SAFE GRD", "SAFE OCN", "dataset(s) d'appartenance",
-               "start date SAFE", "horodating", "polarization", "unité"]
-    columns = [c for c in columns if c in df.columns]
-    
-    result_df = df.select(columns).slice(request.offset, request.limit)
-    
-    return {
-        "total": df.height,
-        "limit": request.limit,
-        "offset": request.offset,
-        "rows": result_df.to_dicts(),
-    }
+    try:
+        if not catalogue_manager.is_loaded():
+            raise HTTPException(status_code=503, detail="Catalogue not loaded")
+        
+        # Debug logging
+        logger.info(f"Filter request: datasets={request.datasets}")
+        logger.info(f"Filter request: polarization={request.polarization}")
+        logger.info(f"Filter request: satellites={request.satellites}")
+        
+        df = apply_filters(catalogue_manager.df, request)
+        
+        # Select columns to return
+        columns = ["SAFE SLC", "SAFE GRD", "SAFE OCN", "dataset(s) d'appartenance",
+                   "start date SAFE", "horodating", "polarization", "unité"]
+        columns = [c for c in columns if c in df.columns]
+        
+        result_df = df.select(columns).slice(request.offset, request.limit)
+        
+        return {
+            "total": df.height,
+            "limit": request.limit,
+            "offset": request.offset,
+            "rows": result_df.to_dicts(),
+        }
+    except Exception as e:
+        logger.error(f"Error in filter_catalogue: {e}")
+        logger.error(traceback.format_exc())
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.post("/map")

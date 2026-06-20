@@ -3,101 +3,339 @@
 {% block title %}Browse Catalogue{% endblock %}
 
 {% block extra_head %}
-<script src="https://cdn.plot.ly/plotly-2.27.0.min.js"></script>
 <link rel="stylesheet" href="/static/css/browse.css">
 {% endblock %}
 
 {% block content %}
-<div class="browse-container">
+<div class="page-header">
     <h1>🔍 Browse Catalogue</h1>
     <p class="subtitle">Explore products with filters and visualizations</p>
-
-    <!-- Filters -->
-    <section class="filters-section">
-        <form id="filter-form">
-            <div class="filter-row">
-                <div class="filter-group">
-                    <label>SAFE SLC</label>
-                    <input type="text" id="slc-filter" placeholder="Partial match">
-                </div>
-                <div class="filter-group">
-                    <label>SAFE GRD</label>
-                    <input type="text" id="grd-filter" placeholder="Partial match">
-                </div>
-                <div class="filter-group">
-                    <label>Dataset</label>
-                    <select id="dataset-filter" multiple>
-                        <option value="hibou2">hibou2</option>
-                        <option value="castor5">castor5</option>
-                        <option value="zebra">zebra</option>
-                        <option value="lion">lion</option>
-                    </select>
-                </div>
-            </div>
-            <div class="filter-row">
-                <div class="filter-group">
-                    <label>Polarization</label>
-                    <select id="polarization-filter" multiple>
-                        <option value="1SDV">1SDV</option>
-                        <option value="1SSV">1SSV</option>
-                        <option value="1SDH">1SDH</option>
-                        <option value="1SSH">1SSH</option>
-                    </select>
-                </div>
-                <div class="filter-group">
-                    <label>Satellite</label>
-                    <select id="satellite-filter" multiple>
-                        <option value="S1A">S1A</option>
-                        <option value="S1B">S1B</option>
-                        <option value="S1C">S1C</option>
-                        <option value="S1D">S1D</option>
-                    </select>
-                </div>
-                <div class="filter-group">
-                    <label>Date range</label>
-                    <input type="date" id="date-start">
-                    <input type="date" id="date-end">
-                </div>
-                <div class="filter-group">
-                    <button type="submit">Apply Filters</button>
-                    <button type="reset">Reset</button>
-                </div>
-            </div>
-        </form>
-    </section>
-
-    <!-- Visualizations Grid -->
-    <section class="viz-grid">
-        <div class="viz-item" id="map-container">
-            <h3>🌍 Footprints</h3>
-            <div id="map-plot"></div>
-        </div>
-        <div class="viz-item" id="daily-container">
-            <h3>📅 Daily Acquisitions</h3>
-            <div id="daily-plot"></div>
-        </div>
-        <div class="viz-item" id="pie-container">
-            <h3>📊 Polarization & Satellite</h3>
-            <div id="pie-plot"></div>
-        </div>
-        <div class="viz-item" id="hs-tp-container">
-            <h3>🌊 Hs vs Tp Heatmap</h3>
-            <div id="hs-tp-plot"></div>
-        </div>
-    </section>
-
-    <!-- Results Table -->
-    <section class="results-section">
-        <h2>📋 Filtered Results</h2>
-        <div id="results-table"></div>
-        <div id="pagination">
-            <button id="prev-page">Previous</button>
-            <span id="page-info">Page 1</span>
-            <button id="next-page">Next</button>
-        </div>
-    </section>
 </div>
 
-<script src="/static/js/filters.js"></script>
-<script src="/static/js/browse.js"></script>
+<!-- Filters -->
+<div class="filter-section">
+    <h2>🔎 Filters</h2>
+    <p class="filter-help">Select criteria to filter the catalogue. Use Ctrl/Cmd to select multiple options.</p>
+    <form id="filter-form">
+        <div class="filter-row">
+            <div class="filter-group">
+                <label class="filter-label"><span class="icon">📝</span> SAFE SLC</label>
+                <input type="text" id="slc-filter" placeholder="Partial match">
+            </div>
+            <div class="filter-group">
+                <label class="filter-label"><span class="icon">📝</span> SAFE GRD</label>
+                <input type="text" id="grd-filter" placeholder="Partial match">
+            </div>
+            <div class="filter-group">
+                <label class="filter-label"><span class="icon">📁</span> Dataset</label>
+                <select id="dataset-filter" multiple>
+                    <option value="hibou2">hibou2</option>
+                    <option value="castor5">castor5</option>
+                    <option value="zebra">zebra</option>
+                    <option value="lion">lion</option>
+                </select>
+            </div>
+        </div>
+        <div class="filter-row">
+            <div class="filter-group">
+                <label class="filter-label"><span class="icon">🔬</span> Polarization</label>
+                <select id="polarization-filter" multiple>
+                    <option value="1SDV">1SDV</option>
+                    <option value="1SSV">1SSV</option>
+                    <option value="1SDH">1SDH</option>
+                    <option value="1SSH">1SSH</option>
+                </select>
+            </div>
+            <div class="filter-group">
+                <label class="filter-label"><span class="icon">🛰️</span> Satellite</label>
+                <select id="satellite-filter" multiple>
+                    <option value="S1A">S1A</option>
+                    <option value="S1B">S1B</option>
+                    <option value="S1C">S1C</option>
+                    <option value="S1D">S1D</option>
+                </select>
+            </div>
+            <div class="filter-group">
+                <label class="filter-label"><span class="icon">📅</span> Date range</label>
+                <div class="date-range">
+                    <input type="date" id="date-start" placeholder="Start">
+                    <input type="date" id="date-end" placeholder="End">
+                </div>
+            </div>
+            <div class="filter-group filter-actions">
+                <button type="submit" class="btn btn-primary">Apply Filters</button>
+                <button type="reset" class="btn btn-secondary">Reset</button>
+            </div>
+        </div>
+    </form>
+</div>
+
+<!-- Visualizations Grid -->
+<div class="viz-grid">
+    <div class="viz-item">
+        <h3>🌍 Footprints</h3>
+        <div id="map-plot" class="plot-container"><p class="loading">Map visualization (coming soon)</p></div>
+    </div>
+    <div class="viz-item">
+        <h3>📊 Dataset Distribution</h3>
+        <div id="dataset-bar-chart" class="plot-container"><p class="loading">Loading dataset distribution...</p></div>
+    </div>
+    <div class="viz-item">
+        <h3>📊 Polarization & Satellite</h3>
+        <div id="pie-plot" class="plot-container"><p class="loading">Pie chart (coming soon)</p></div>
+    </div>
+    <div class="viz-item">
+        <h3>🌊 Hs vs Tp Heatmap</h3>
+        <div id="hs-tp-plot" class="plot-container"><p class="loading">Loading data...</p></div>
+    </div>
+</div>
+
+<!-- Results Table -->
+<div class="results-section">
+    <h2>📋 Filtered Results</h2>
+    <div id="results-count" class="results-count"></div>
+    <div class="results-scroll">
+        <div class="table-wrapper" id="results-table">
+            <p class="loading">Apply filters to see results</p>
+        </div>
+    </div>
+    <div id="pagination">
+        <button id="prev-page" class="btn btn-secondary" disabled>◀ Previous</button>
+        <span class="page-info" id="page-info">Page 1</span>
+        <button id="next-page" class="btn btn-secondary" disabled>Next ▶</button>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_scripts %}
+<script>
+    let currentPage = 0;
+    const pageSize = 100;
+
+    function getFilterState() {
+        const datasetSelect = document.getElementById('dataset-filter');
+        const selectedDatasets = Array.from(datasetSelect.selectedOptions).map(opt => opt.value);
+        
+        return {
+            slc_name: document.getElementById('slc-filter').value || null,
+            grd_name: document.getElementById('grd-filter').value || null,
+            datasets: selectedDatasets,
+            polarization: Array.from(document.getElementById('polarization-filter').selectedOptions).map(opt => opt.value),
+            satellites: Array.from(document.getElementById('satellite-filter').selectedOptions).map(opt => opt.value),
+            date_start: document.getElementById('date-start').value || null,
+            date_end: document.getElementById('date-end').value || null,
+            limit: pageSize,
+            offset: currentPage * pageSize
+        };
+    }
+
+    function updateResultsTable(filters) {
+        const tableDiv = document.getElementById('results-table');
+        const countDiv = document.getElementById('results-count');
+        tableDiv.innerHTML = '<p class="loading">Loading...</p>';
+
+        fetch('/api/browse/filter', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(filters)
+        })
+        .then(response => {
+            if (!response.ok) {
+                return response.text().then(text => {
+                    throw new Error(`HTTP ${response.status}: ${text.substring(0, 200)}`);
+                });
+            }
+            return response.json();
+        })
+        .then(data => {
+            const rows = data.rows || [];
+            const total = data.total || 0;
+            countDiv.textContent = `Showing ${filters.offset + 1}-${Math.min(filters.offset + rows.length, total)} of ${total} results`;
+
+            let html = '<table class="table"><thead><tr><th>SAFE SLC</th><th>SAFE GRD</th><th>Dataset</th><th>Start Date</th><th>Polarization</th><th>Satellite</th></tr></thead><tbody>';
+            if (rows.length === 0) {
+                html += '<tr><td colspan="6">No results found</td></tr>';
+            } else {
+                rows.forEach(row => {
+                    const datasets = row['dataset(s) d\'appartenance'] || [];
+                    html += `<tr>
+                        <td>${row['SAFE SLC'] || ''}</td>
+                        <td>${row['SAFE GRD'] || ''}</td>
+                        <td>${datasets.join(', ')}</td>
+                        <td>${row['start date SAFE'] || ''}</td>
+                        <td>${row['polarization'] || ''}</td>
+                        <td>${row['unité'] || ''}</td>
+                    </tr>`;
+                });
+            }
+            html += '</tbody></table>';
+            tableDiv.innerHTML = html;
+
+            const totalPages = Math.ceil(total / pageSize);
+            document.getElementById('page-info').textContent = `Page ${currentPage + 1} of ${totalPages || 1}`;
+            document.getElementById('prev-page').disabled = currentPage === 0;
+            document.getElementById('next-page').disabled = currentPage >= totalPages - 1 || totalPages === 0;
+        })
+        .catch(error => {
+            console.error('Error fetching results:', error);
+            tableDiv.innerHTML = `<p class="loading" style="color: #dc3545;">Error: ${error.message}</p>`;
+        });
+    }
+
+    function updateDatasetBarChart(filters) {
+        // Get filtered data for the bar chart - use max allowed limit (1000)
+        fetch('/api/browse/filter', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ ...filters, limit: 1000, offset: 0 })
+        })
+        .then(response => {
+            if (!response.ok) {
+                return response.text().then(text => {
+                    throw new Error(`HTTP ${response.status}: ${text.substring(0, 200)}`);
+                });
+            }
+            return response.json();
+        })
+        .then(data => {
+            const rows = data.rows || [];
+            const total = data.total || 0;
+            const plotDiv = document.getElementById('dataset-bar-chart');
+            
+            if (rows.length === 0) {
+                plotDiv.innerHTML = '<p class="loading">No data available</p>';
+                return;
+            }
+            
+            // Count dataset occurrences
+            const datasetCounts = {};
+            rows.forEach(row => {
+                const datasets = row['dataset(s) d\'appartenance'] || [];
+                datasets.forEach(ds => {
+                    datasetCounts[ds] = (datasetCounts[ds] || 0) + 1;
+                });
+            });
+            
+            const labels = Object.keys(datasetCounts);
+            const values = Object.values(datasetCounts);
+            
+            if (labels.length === 0) {
+                plotDiv.innerHTML = '<p class="loading">No dataset data available</p>';
+                return;
+            }
+            
+            const trace = {
+                x: labels,
+                y: values,
+                type: 'bar',
+                marker: {
+                    color: ['#1a365d', '#2c5282', '#48bb78', '#f6ad55', '#fc8181', '#9f7aea'],
+                },
+                text: values.map(v => v.toString()),
+                textposition: 'outside'
+            };
+            
+            const layout = {
+                title: `Dataset Distribution (${total} products)`,
+                xaxis: { title: 'Dataset' },
+                yaxis: { title: 'Count' },
+                height: 250,
+                margin: { l: 50, r: 20, t: 40, b: 60 }
+            };
+            
+            Plotly.newPlot('dataset-bar-chart', [trace], layout);
+        })
+        .catch(error => {
+            console.error('Error fetching dataset distribution:', error);
+            const plotDiv = document.getElementById('dataset-bar-chart');
+            plotDiv.innerHTML = `<p class="loading" style="color: #dc3545;">Error: ${error.message}</p>`;
+        });
+    }
+
+    function updateHsTpHeatmap(filters) {
+        fetch('/api/browse/heatmap/hs_tp', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ 
+                filter: filters,
+                variable: "hs_tp"
+            })
+        })
+        .then(response => {
+            if (!response.ok) {
+                return response.text().then(text => {
+                    throw new Error(`HTTP ${response.status}: ${text.substring(0, 200)}`);
+                });
+            }
+            return response.json();
+        })
+        .then(data => {
+            const plotDiv = document.getElementById('hs-tp-plot');
+            if (data.data && data.data.hs && data.data.hs.length > 0) {
+                const trace = {
+                    x: data.data.hs,
+                    y: data.data.tp,
+                    mode: 'markers',
+                    marker: { size: 5, color: 'blue', opacity: 0.6 },
+                    type: 'scatter'
+                };
+                const layout = {
+                    title: `Hs vs Tp (${data.count} points)`,
+                    xaxis: { title: 'Hs (m)' },
+                    yaxis: { title: 'Tp (s)' },
+                    height: 250,
+                    margin: { l: 50, r: 20, t: 40, b: 50 }
+                };
+                Plotly.newPlot('hs-tp-plot', [trace], layout);
+            } else {
+                plotDiv.innerHTML = '<p class="loading">No Hs/Tp data available</p>';
+            }
+        })
+        .catch(error => {
+            console.error('Error fetching heatmap data:', error);
+            const plotDiv = document.getElementById('hs-tp-plot');
+            plotDiv.innerHTML = `<p class="loading" style="color: #dc3545;">Error: ${error.message}</p>`;
+        });
+    }
+
+    // Event listeners
+    document.getElementById('filter-form').addEventListener('submit', function(e) {
+        e.preventDefault();
+        currentPage = 0;
+        const filters = getFilterState();
+        updateResultsTable(filters);
+        updateDatasetBarChart(filters);
+        updateHsTpHeatmap(filters);
+    });
+
+    document.getElementById('filter-form').querySelector('button[type="reset"]').addEventListener('click', function(e) {
+        e.preventDefault();
+        document.getElementById('filter-form').reset();
+        currentPage = 0;
+        const filters = getFilterState();
+        updateResultsTable(filters);
+        updateDatasetBarChart(filters);
+        updateHsTpHeatmap(filters);
+    });
+
+    document.getElementById('prev-page').addEventListener('click', function() {
+        if (currentPage > 0) {
+            currentPage--;
+            const filters = getFilterState();
+            updateResultsTable(filters);
+        }
+    });
+
+    document.getElementById('next-page').addEventListener('click', function() {
+        currentPage++;
+        const filters = getFilterState();
+        updateResultsTable(filters);
+    });
+
+    // Initial load
+    const initialFilters = getFilterState();
+    updateResultsTable(initialFilters);
+    updateDatasetBarChart(initialFilters);
+    updateHsTpHeatmap(initialFilters);
+</script>
 {% endblock %}
