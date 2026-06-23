@@ -1,6 +1,6 @@
 """Configuration management for s1iw_catalogue."""
 
-from typing import Any, Dict, Optional, Union
+from typing import Any, Dict, Optional
 
 from pathlib import Path
 
@@ -83,7 +83,7 @@ def _deep_merge(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any
     return result
 
 
-class S1IWCatalogueConfig(dict):
+class S1IWCatalogueConfig(dict[str, Any]):
     """Typed configuration dictionary (placeholder)."""
 
     pass
