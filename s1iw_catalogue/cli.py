@@ -1,7 +1,8 @@
 """Command-line interface for s1iw_catalogue."""
 
-from pathlib import Path
 from typing import Optional
+
+from pathlib import Path
 
 import click
 import polars as pl
@@ -16,7 +17,7 @@ from s1iw_catalogue.stats import CatalogueStats
     "--config", "-c", type=click.Path(exists=True), help="Path to configuration file."
 )
 @click.pass_context
-def main(ctx: click.Context, config: Optional[Path]) -> None:
+def main(ctx: click.Context, config: Path | None) -> None:
     """s1iw_catalogue – Exhaustive catalogue of Sentinel-1 IW SAFE products."""
     ctx.ensure_object(dict)
     # Load configuration once and store in context
@@ -82,9 +83,9 @@ def update(ctx: click.Context, catalogue: Path, force_meteo: bool) -> None:
 def stats(
     ctx: click.Context,
     catalogue: Path,
-    dataset: Optional[str],
+    dataset: str | None,
     verbose: bool,
-    output: Optional[Path],
+    output: Path | None,
 ) -> None:
     """Print statistics about the catalogue."""
     import polars as pl
@@ -111,7 +112,13 @@ def stats(
             click.echo("\n" + "-" * 60)
             click.echo("VERBOSE OUTPUT - Sample rows")
             click.echo("-" * 60)
-            sample_cols = ["SAFE SLC", "SAFE GRD", "dataset(s) d'appartenance", "polarization", "unité"]
+            sample_cols = [
+                "SAFE SLC",
+                "SAFE GRD",
+                "dataset(s) d'appartenance",
+                "polarization",
+                "unité",
+            ]
             sample_cols = [c for c in sample_cols if c in df.columns]
             click.echo(df.select(sample_cols).head(5))
 
@@ -128,7 +135,7 @@ def stats(
     "--backup-dir", "-d", type=click.Path(), help="Directory to store backups."
 )
 @click.pass_context
-def backup(ctx: click.Context, catalogue: Path, backup_dir: Optional[Path]) -> None:
+def backup(ctx: click.Context, catalogue: Path, backup_dir: Path | None) -> None:
     """Create a timestamped backup of the catalogue."""
     cfg = ctx.obj["config"]
     cat = S1IWCatalogue(catalogue_path=catalogue, config=cfg)

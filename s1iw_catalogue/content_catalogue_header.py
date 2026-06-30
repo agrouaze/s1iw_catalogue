@@ -47,10 +47,10 @@ def main() -> None:
         help="Show summary statistics instead of rows.",
     )
     parser.add_argument(
-    "--cell-width",
-    type=int,
-    default=100,
-    help="Maximum characters per cell (default: 100).",
+        "--cell-width",
+        type=int,
+        default=100,
+        help="Maximum characters per cell (default: 100).",
     )
     args = parser.parse_args()
     pl.Config.set_fmt_str_lengths(args.cell_width)
@@ -76,7 +76,14 @@ def main() -> None:
     # Select columns
     if not args.columns and not args.show_all:
         # Default key columns: SAFE SLC, SAFE GRD, start date, horodating, polarization, unité
-        default_cols = ["SAFE SLC", "SAFE GRD", "start date SAFE", "horodating", "polarization", "unité"]
+        default_cols = [
+            "SAFE SLC",
+            "SAFE GRD",
+            "start date SAFE",
+            "horodating",
+            "polarization",
+            "unité",
+        ]
         cols_to_show = [c for c in default_cols if c in df.columns]
     elif args.columns:
         missing = [c for c in args.columns if c not in df.columns]
