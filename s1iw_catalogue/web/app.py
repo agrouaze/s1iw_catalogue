@@ -4,18 +4,18 @@ import os
 from pathlib import Path
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
 from s1iw_catalogue.web.routes import stats, browse
 from s1iw_catalogue.web.utils.data_loader import catalogue_manager
+from s1iw_catalogue.web.template_engine import get_templates
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Lifespan context manager for startup/shutdown events."""
-    # Startup: Load catalogue
     catalogue_path = os.environ.get("S1IW_CATALOGUE_PATH")
     if catalogue_path:
         catalogue_manager.load(Path(catalogue_path))
@@ -25,7 +25,6 @@ async def lifespan(app: FastAPI):
     
     yield
     
-    # Shutdown: Clean up
     catalogue_manager.clear()
     print("Catalogue unloaded")
 
@@ -41,33 +40,35 @@ app = FastAPI(
 # Configure CORS
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # In production, restrict to specific origins
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# Register routes
+# Set up templates
+templates = get_templates()
+
+# Mount static files
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+static_dir = os.path.join(BASE_DIR, "static")
+app.mount("/static", StaticFiles(directory=static_dir), name="static")
+
+# Register API routes
 app.include_router(stats.router, prefix="/api/stats", tags=["stats"])
 app.include_router(browse.router, prefix="/api/browse", tags=["browse"])
 
-# Static files (optional, for future frontend)
-# app.mount("/static", StaticFiles(directory="s1iw_catalogue/web/static"), name="static")
-
 
 @app.get("/")
-async def root():
-    """Root endpoint returning API info."""
-    return {
-        "name": "s1iw_catalogue API",
-        "version": "0.1.0",
-        "endpoints": {
-            "stats": "/api/stats",
-            "browse": "/api/browse",
-        },
-        "docs": "/docs",
-        "redoc": "/redoc",
-    }
+async def home(request: Request):
+    """Home page with global statistics."""
+    return templates.TemplateResponse("index.html", {"request": request})
+
+
+@app.get("/browse")
+async def browse_page(request: Request):
+    """Browse page with filters and visualizations."""
+    return templates.TemplateResponse("browse.html", {"request": request})
 
 
 @app.get("/api/health")
