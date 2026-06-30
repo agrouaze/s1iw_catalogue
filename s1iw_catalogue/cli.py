@@ -27,20 +27,31 @@ def main(ctx: click.Context, config: Path | None) -> None:
 
 
 @main.command()
+@click.option("--output", "-o", required=True, type=click.Path(), help="Output .parquet file path.")
 @click.option(
-    "--output",
-    "-o",
-    required=True,
-    type=click.Path(),
-    help="Output .parquet file path.",
+    "--listing",
+    "-l",
+    help="Name of a single dataset/listing from the config file to use (e.g., ciaran2023). If omitted, all listings are used.",
 )
 @click.pass_context
-def create(ctx: click.Context, output: Path) -> None:
+def create(ctx: click.Context, output: Path, listing: Optional[str]) -> None:
     """Create a brand new catalogue from scratch."""
     cfg = ctx.obj["config"]
     config_path = ctx.obj.get("config_path")
     cat = S1IWCatalogue(catalogue_path=output, config=cfg, config_path=config_path)
-    click.echo(f"Creating catalogue at {output}...")
+
+    # If a listing name is provided, filter reference_listings to only that key
+    if listing:
+        reference_listings = cfg.get("paths", {}).get("reference_listings", {})
+        if listing not in reference_listings:
+            click.echo(f"Error: Listing '{listing}' not found in configuration.", err=True)
+            raise click.Abort()
+        # Create a filtered config dict that only contains that listing
+        filtered_config = cfg.copy()
+        filtered_config["paths"] = {"reference_listings": {listing: reference_listings[listing]}}
+        # Recreate the catalogue with the filtered config
+        cat = S1IWCatalogue(catalogue_path=output, config=filtered_config, config_path=config_path)
+
     cat.create(output_path=output)
     click.echo("Done.")
 
@@ -201,6 +212,36 @@ def serve(
         port=port,
         reload=reload,
     )
+
+
+@main.command()
+@click.argument(
+    "catalogues",
+    nargs=-1,
+    required=True,
+    type=click.Path(exists=True),
+)
+@click.option(
+    "--output",
+    "-o",
+    required=True,
+    type=click.Path(),
+    help="Output merged .parquet file.",
+)
+@click.pass_context
+def merge(ctx: click.Context, catalogues: tuple[Path], output: Path) -> None:
+    """Merge multiple catalogues into a single file.
+
+    CATALOGUES: list of input .parquet files to merge (at least 2).
+    """
+    if len(catalogues) < 2:
+        click.echo("Error: At least two catalogues are required for merging.", err=True)
+        raise click.Abort()
+    cfg = ctx.obj["config"]
+    config_path = ctx.obj.get("config_path")
+    cat = S1IWCatalogue(catalogue_path=output, config=cfg, config_path=config_path)
+    cat.merge(list(catalogues), output)
+    click.echo(f"Merged {len(catalogues)} catalogues into {output}")
 
 
 if __name__ == "__main__":

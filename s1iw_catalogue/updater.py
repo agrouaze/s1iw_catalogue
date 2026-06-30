@@ -1954,6 +1954,151 @@ class CatalogueUpdater:
             logger.error(f"CDSE query failed for {slc_name}: {e}")
         
         return None
+    
+    def merge_catalogues(
+        self,
+        catalogue_paths: list[Path | str],
+        output_path: Path | str,
+        config_path: Path | str | None = None,
+        ) -> None:
+        """
+        Merge multiple catalogues into a single Parquet file.
+
+        - Each row is identified by its SAFE SLC/GRD/OCN (only one non-null).
+        - For duplicates, dataset lists are unioned, category is chosen by priority,
+        horodating takes the most recent, and presence columns keep first non-null.
+        """
+        import polars as pl
+        from pathlib import Path
+
+        # Convert all inputs to Path objects
+        catalogue_paths = [Path(p) for p in catalogue_paths]
+        output_path = Path(output_path)
+        if config_path:
+            config_path = Path(config_path)
+
+        if len(catalogue_paths) < 2:
+            raise ValueError("At least two catalogues are required for merging.")
+
+        # Validate schemas
+        schemas = []
+        for p in catalogue_paths:
+            if not p.exists():
+                raise FileNotFoundError(f"Catalogue not found: {p}")
+            # Read only the schema (no data) to compare
+            df = pl.read_parquet(p, n_rows=0)
+            schemas.append(df.schema)
+
+        # Ensure all schemas are identical
+        base_schema = schemas[0]
+        for i, s in enumerate(schemas[1:], start=1):
+            if s != base_schema:
+                raise ValueError(f"Schema mismatch in {catalogue_paths[i]}. Expected {base_schema}, got {s}")
+
+
+
+        # Read all catalogues into a single DataFrame (lazy scanning could be used for large files)
+        # We'll use pl.scan_parquet for memory efficiency, then collect after grouping.
+        lazy_dfs = [pl.scan_parquet(str(p)) for p in catalogue_paths]
+        combined = pl.concat(lazy_dfs, how="vertical_relaxed")
+
+        # Create unique identifier: SAFE SLC if not null, else SAFE GRD, else SAFE OCN
+        combined = combined.with_columns(
+            pl.when(pl.col("SAFE SLC").is_not_null())
+            .then(pl.col("SAFE SLC"))
+            .when(pl.col("SAFE GRD").is_not_null())
+            .then(pl.col("SAFE GRD"))
+            .otherwise(pl.col("SAFE OCN"))
+            .alias("_safe_id")
+        )
+
+        # Sort by horodating descending so that the most recent row is first per group
+        combined = combined.sort("horodating", descending=True)
+
+        # Group by _safe_id and aggregate
+        # For columns that should be merged, we use:
+        # - first (since sorted, first is the most recent horodating)
+        # - concat_list + unique for dataset(s)
+        # - custom max for category via a map
+        aggregated = combined.group_by("_safe_id").agg([
+            # Primary SAFE columns: take first (most recent row)
+            pl.col("SAFE SLC").first().alias("SAFE SLC"),
+            pl.col("SAFE GRD").first().alias("SAFE GRD"),
+            pl.col("SAFE OCN").first().alias("SAFE OCN"),
+
+            # Dataset list: union of all
+            pl.concat_list("dataset(s) d'appartenance")
+            .list.unique()
+            .alias("dataset(s) d'appartenance"),
+
+            # Dataset category: highest priority (undefined < train < val < test)
+            # We'll use a custom aggregation with a helper function
+            # But we can use a map_elements on the list of categories
+            # Since we don't have a direct aggregation for category priority, we'll do it after grouping.
+            # We'll first collect all categories per group, then compute the priority later.
+            pl.col("dataset_category").alias("_categories"),
+
+            # Presence columns: take first (most recent horodating)
+            pl.col("presence SLC").first().alias("presence SLC"),
+            pl.col("presence GRD").first().alias("presence GRD"),
+            pl.col("presence OCN").first().alias("presence OCN"),
+            pl.col("presence L1B XSP A21").first().alias("presence L1B XSP A21"),
+            pl.col("presence L1C XSP B17").first().alias("presence L1C XSP B17"),
+
+            # Meteorological and other columns: take first
+            pl.col("Hs WW3").first().alias("Hs WW3"),
+            pl.col("Tp WW3").first().alias("Tp WW3"),
+            pl.col("U10 ecmwf").first().alias("U10 ecmwf"),
+            pl.col("v10 ecmwf").first().alias("v10 ecmwf"),
+            pl.col("start date SAFE").first().alias("start date SAFE"),
+            pl.col("horodating").first().alias("horodating"),  # we already sorted by horodating, so first is max
+            pl.col("polygon SLC").first().alias("polygon SLC"),
+            pl.col("polygon GRD").first().alias("polygon GRD"),
+            pl.col("S3path SLC").first().alias("S3path SLC"),
+            pl.col("S3path GRD").first().alias("S3path GRD"),
+            pl.col("polarization").first().alias("polarization"),
+            pl.col("unité").first().alias("unité"),
+        ])
+
+        # Now compute the category using priority logic from _compute_category_and_conflicts
+        # We need to apply the same priority function to each group's categories.
+        # We can use map_elements on the "_categories" list column.
+        # First, we need to re-import the priority function (or duplicate it).
+        # We'll define a small function inside this method.
+        def _category_priority(category: str) -> int:
+            priorities = {"undefined": 0, "train": 1, "val": 2, "test": 3}
+            return priorities.get(category.lower(), 0)
+
+        def _best_category(categories: list[str]) -> str:
+            if not categories:
+                return "undefined"
+            # Remove None and empty strings
+            categories = [c for c in categories if c]
+            if not categories:
+                return "undefined"
+            # Pick category with highest priority
+            return max(categories, key=_category_priority)
+
+        # Apply the function to the "_categories" column
+        aggregated = aggregated.with_columns(
+            pl.struct(["_categories"])
+            .map_elements(lambda x: _best_category(x["_categories"]), return_dtype=pl.Utf8)
+            .alias("dataset_category")
+        )
+
+        # Drop the temporary _categories column
+        aggregated = aggregated.drop("_categories", "_safe_id")
+
+        # Ensure the columns are in the correct order (same as SCHEMA)
+        # Convert to a DataFrame and select columns in SCHEMA order
+        merged_df = aggregated.select(list(SCHEMA.keys()))
+
+        # Write to output with metadata (using existing helper)
+        # We need a way to write with metadata; since we are in updater, we can call a method from catalogue or handle it here.
+        # We'll write using polars directly, and later the caller can add metadata if needed.
+        # merged_df.write_parquet(output_path, compression="snappy")
+        merged_df.sink_parquet(output_path, compression="snappy")
+        logger.info(f"Merged catalogue written to {output_path}")
 
     def update_meteorology(self, df: pl.DataFrame, force: bool = False) -> pl.DataFrame:
         return df

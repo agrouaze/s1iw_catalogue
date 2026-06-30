@@ -208,6 +208,10 @@ class S1IWCatalogue:
         logger.info(f"Update complete. Final catalogue has {existing_df.height} rows.")
         logger.info(f"Path: {self._catalogue_path}")
 
+    def merge(self, input_paths: list[Path], output_path: Path) -> None:
+        """Merge multiple catalogues into one."""
+        self._updater.merge_catalogues(input_paths, output_path, self._config_path)
+
     def stats(self, dataset: str | None = None, verbose: bool = False, output: str | Path | None = None) -> dict[str, Any]:
         df = self._load_catalogue()
         if dataset:
