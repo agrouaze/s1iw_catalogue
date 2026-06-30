@@ -23,6 +23,7 @@ def main(ctx: click.Context, config: Path | None) -> None:
     # Load configuration once and store in context
     cfg = load_config(config_path=config)
     ctx.obj["config"] = cfg
+    ctx.obj["config_path"] = config  # store the path for metadata
 
 
 @main.command()
@@ -37,7 +38,8 @@ def main(ctx: click.Context, config: Path | None) -> None:
 def create(ctx: click.Context, output: Path) -> None:
     """Create a brand new catalogue from scratch."""
     cfg = ctx.obj["config"]
-    cat = S1IWCatalogue(catalogue_path=output, config=cfg)
+    config_path = ctx.obj.get("config_path")
+    cat = S1IWCatalogue(catalogue_path=output, config=cfg, config_path=config_path)
     click.echo(f"Creating catalogue at {output}...")
     cat.create(output_path=output)
     click.echo("Done.")
@@ -60,7 +62,8 @@ def create(ctx: click.Context, output: Path) -> None:
 def update(ctx: click.Context, catalogue: Path, force_meteo: bool) -> None:
     """Incrementally update the catalogue."""
     cfg = ctx.obj["config"]
-    cat = S1IWCatalogue(catalogue_path=catalogue, config=cfg)
+    config_path = ctx.obj.get("config_path")
+    cat = S1IWCatalogue(catalogue_path=catalogue, config=cfg, config_path=config_path)
     click.echo(f"Updating {catalogue}...")
     cat.update(force_meteo_refresh=force_meteo)
     click.echo("Done.")
