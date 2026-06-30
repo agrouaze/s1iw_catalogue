@@ -158,55 +158,75 @@ class CatalogueUpdater:
 
     def build_from_listings(
         self,
-        slc_listings: str | Path | list[str | Path] | dict[str, Any],
-        grd_listings: str | Path | list[str | Path] | dict[str, Any],
+        listings: dict[str, Any],
     ) -> pl.DataFrame:
         """
         Combine SLC and GRD listings into a catalogue DataFrame (no external queries).
 
-        Now handles dataset names from the configuration structure:
+        Expected config structure:
         paths:
         reference_listings:
-            slc:
-            "hibou2": "assets/listings/dummy_slc_listing_hibou.txt"
-            "castor5": "assets/listings/dummy_slc_listing_castor.txt"
-            grd:
-            "zebra": "assets/listings/dummy_grd_listing_zebre.txt"
-        """
-        logger.info("Building catalogue from SLC listings...")
+            dataset_name:
+            path: "/path/to/listing.txt"
+            type: "slc" | "grd" | "ocn"
+            description: "..."   (optional, stored only in config)
+            category: "..."      (optional, stored only in config)
 
-        # Handle both old format (list) and new format (dict with dataset names)
+        Listings without a valid 'type' or 'path' are skipped with a warning.
+        """
+        logger.info("Building catalogue from listings...")
+
+        # Separate by type
+        slc_paths = []
+        grd_paths = []
+        ocn_paths = []  # for future use
+
+        for name, info in listings.items():
+            if not isinstance(info, dict):
+                logger.warning(f"Listing '{name}' is not a dict; skipping.")
+                continue
+
+            path = info.get("path")
+            ptype = info.get("type", "").lower()
+
+            if not path:
+                logger.warning(f"Listing '{name}' has no 'path'; skipping.")
+                continue
+
+            if ptype not in ("slc", "grd", "ocn"):
+                logger.warning(
+                    f"Listing '{name}' has invalid type '{ptype}'; "
+                    "must be one of: slc, grd, ocn. Skipping."
+                )
+                continue
+
+            if ptype == "slc":
+                slc_paths.append((name, path))
+            elif ptype == "grd":
+                grd_paths.append((name, path))
+            elif ptype == "ocn":
+                ocn_paths.append((name, path))
+
+        # ---------- Build SLC rows ----------
         slc_dfs = []
-        if isinstance(slc_listings, dict):
-            # New format: dataset_name -> listing_path
-            for dataset_name, listing_path in slc_listings.items():
-                logger.info(f"Reading SLC dataset '{dataset_name}' from {listing_path}")
-                df_raw = self.read_listings(listing_path)
+        if slc_paths:
+            logger.info(f"Reading {len(slc_paths)} SLC dataset(s)...")
+            for name, path in slc_paths:
+                logger.info(f"Reading SLC dataset '{name}' from {path}")
+                df_raw = self.read_listings(path)
                 if df_raw.height > 0:
-                    # Add dataset name to each row
                     df_raw = df_raw.with_columns(
-                        pl.lit([dataset_name], dtype=pl.List(pl.Utf8)).alias(
+                        pl.lit([name], dtype=pl.List(pl.Utf8)).alias(
                             "dataset(s) d'appartenance"
                         )
                     )
                     slc_dfs.append(df_raw)
                 else:
-                    logger.warning(
-                        f"No valid SLC entries found in dataset '{dataset_name}'"
-                    )
+                    logger.warning(f"No valid SLC entries found in dataset '{name}'")
         else:
-            # Old format: single path or list of paths (no dataset names)
-            df_raw = self.read_listings(slc_listings)
-            if df_raw.height > 0:
-                df_raw = df_raw.with_columns(
-                    pl.lit([], dtype=pl.List(pl.Utf8)).alias(
-                        "dataset(s) d'appartenance"
-                    )
-                )
-                slc_dfs.append(df_raw)
+            logger.info("No SLC datasets found in configuration.")
 
         if not slc_dfs:
-            logger.warning("No valid SLC entries found. The SLC part will be empty.")
             slc_df_raw = pl.DataFrame(
                 schema={
                     "safe_name": pl.Utf8,
@@ -220,7 +240,7 @@ class CatalogueUpdater:
         else:
             slc_df_raw = pl.concat(slc_dfs, how="vertical_relaxed")
 
-        # Build SLC rows
+        # Build SLC rows with all required columns
         slc_df = slc_df_raw.with_columns(
             pl.lit(None, dtype=pl.Utf8).alias("SAFE GRD"),
             pl.lit(None, dtype=pl.Utf8).alias("SAFE OCN"),
@@ -228,13 +248,13 @@ class CatalogueUpdater:
             pl.lit(None, dtype=pl.Utf8).alias("presence SLC"),
             pl.lit(None, dtype=pl.Utf8).alias("presence GRD"),
             pl.lit(None, dtype=pl.Utf8).alias("presence OCN"),
+            pl.lit(None, dtype=pl.Utf8).alias("dataset_category"),
             pl.lit(None, dtype=pl.Utf8).alias("presence L1B XSP A21"),
             pl.lit(None, dtype=pl.Utf8).alias("presence L1C XSP B17"),
-            # dataset(s) d'appartenance already has the dataset name(s)
-            pl.lit(None, dtype=pl.Float32).alias("Hs WW3"),  # <-- ADD THIS
-            pl.lit(None, dtype=pl.Float32).alias("Tp WW3"),  # <-- ADD THIS
-            pl.lit(None, dtype=pl.Float32).alias("U10 ecmwf"),  # <-- ADD THIS
-            pl.lit(None, dtype=pl.Float32).alias("v10 ecmwf"),  # <-- ADD THIS
+            pl.lit(None, dtype=pl.Float32).alias("Hs WW3"),
+            pl.lit(None, dtype=pl.Float32).alias("Tp WW3"),
+            pl.lit(None, dtype=pl.Float32).alias("U10 ecmwf"),
+            pl.lit(None, dtype=pl.Float32).alias("v10 ecmwf"),
             pl.col("start_date").alias("start date SAFE"),
             pl.lit(datetime.datetime.now()).alias("horodating"),
             pl.lit(None, dtype=pl.Utf8).alias("polygon SLC"),
@@ -245,37 +265,26 @@ class CatalogueUpdater:
             pl.col("mission").alias("unité"),
         ).select(list(SCHEMA.keys()))
 
-        # GRD listings
-        logger.info("Building catalogue from GRD listings...")
-
+        # ---------- Build GRD rows ----------
         grd_dfs = []
-        if isinstance(grd_listings, dict):
-            for dataset_name, listing_path in grd_listings.items():
-                logger.info(f"Reading GRD dataset '{dataset_name}' from {listing_path}")
-                df_raw = self.read_listings(listing_path)
+        if grd_paths:
+            logger.info(f"Reading {len(grd_paths)} GRD dataset(s)...")
+            for name, path in grd_paths:
+                logger.info(f"Reading GRD dataset '{name}' from {path}")
+                df_raw = self.read_listings(path)
                 if df_raw.height > 0:
                     df_raw = df_raw.with_columns(
-                        pl.lit([dataset_name], dtype=pl.List(pl.Utf8)).alias(
+                        pl.lit([name], dtype=pl.List(pl.Utf8)).alias(
                             "dataset(s) d'appartenance"
                         )
                     )
                     grd_dfs.append(df_raw)
                 else:
-                    logger.warning(
-                        f"No valid GRD entries found in dataset '{dataset_name}'"
-                    )
+                    logger.warning(f"No valid GRD entries found in dataset '{name}'")
         else:
-            df_raw = self.read_listings(grd_listings)
-            if df_raw.height > 0:
-                df_raw = df_raw.with_columns(
-                    pl.lit([], dtype=pl.List(pl.Utf8)).alias(
-                        "dataset(s) d'appartenance"
-                    )
-                )
-                grd_dfs.append(df_raw)
+            logger.info("No GRD datasets found in configuration.")
 
         if not grd_dfs:
-            logger.warning("No valid GRD entries found. The GRD part will be empty.")
             grd_df_raw = pl.DataFrame(
                 schema={
                     "safe_name": pl.Utf8,
@@ -289,7 +298,7 @@ class CatalogueUpdater:
         else:
             grd_df_raw = pl.concat(grd_dfs, how="vertical_relaxed")
 
-        # Build GRD rows
+        # Build GRD rows with all required columns
         grd_df = grd_df_raw.with_columns(
             pl.col("safe_name").alias("SAFE GRD"),
             pl.lit(None, dtype=pl.Utf8).alias("SAFE SLC"),
@@ -297,12 +306,13 @@ class CatalogueUpdater:
             pl.lit(None, dtype=pl.Utf8).alias("presence SLC"),
             pl.lit(None, dtype=pl.Utf8).alias("presence GRD"),
             pl.lit(None, dtype=pl.Utf8).alias("presence OCN"),
+            pl.lit(None, dtype=pl.Utf8).alias("dataset_category"),
             pl.lit(None, dtype=pl.Utf8).alias("presence L1B XSP A21"),
             pl.lit(None, dtype=pl.Utf8).alias("presence L1C XSP B17"),
-            pl.lit(None, dtype=pl.Float32).alias("Hs WW3"),  # <-- ADD THIS
-            pl.lit(None, dtype=pl.Float32).alias("Tp WW3"),  # <-- ADD THIS
-            pl.lit(None, dtype=pl.Float32).alias("U10 ecmwf"),  # <-- ADD THIS
-            pl.lit(None, dtype=pl.Float32).alias("v10 ecmwf"),  # <-- ADD THIS
+            pl.lit(None, dtype=pl.Float32).alias("Hs WW3"),
+            pl.lit(None, dtype=pl.Float32).alias("Tp WW3"),
+            pl.lit(None, dtype=pl.Float32).alias("U10 ecmwf"),
+            pl.lit(None, dtype=pl.Float32).alias("v10 ecmwf"),
             pl.col("start_date").alias("start date SAFE"),
             pl.lit(datetime.datetime.now()).alias("horodating"),
             pl.lit(None, dtype=pl.Utf8).alias("polygon SLC"),
@@ -313,7 +323,7 @@ class CatalogueUpdater:
             pl.col("mission").alias("unité"),
         ).select(list(SCHEMA.keys()))
 
-        # Combine SLC and GRD
+        # ---------- Combine and deduplicate ----------
         combined = pl.concat([slc_df, grd_df], how="vertical_relaxed").unique()
         logger.info(f"Total combined catalogue rows (before dedup): {combined.height}")
         return combined
@@ -727,6 +737,10 @@ class CatalogueUpdater:
             f"Found {grd_orphans.height} GRD orphans and {slc_orphans.height} SLC orphans (total {total_orphans})"
         )
 
+        # Initialize mapping variables to avoid UnboundLocalError
+        mapping_grd_to_slc = {}
+        mapping_slc_to_grd = {}
+
         # Process GRD→SLC in batch
         if grd_orphans.height > 0:
             grd_ids = [row["SAFE GRD"] for row in grd_orphans.to_dicts()]
@@ -740,7 +754,6 @@ class CatalogueUpdater:
                     .otherwise(pl.col("SAFE SLC"))
                     .alias("SAFE SLC")
                 )
-                # Also update the SLC row if it exists (symmetric)
                 df = df.with_columns(
                     pl.when(pl.col("SAFE SLC") == slc_name)
                     .then(pl.lit(grd_name))
@@ -751,7 +764,6 @@ class CatalogueUpdater:
         # Process SLC→GRD in batch
         if slc_orphans.height > 0:
             slc_ids = [row["SAFE SLC"] for row in slc_orphans.to_dicts()]
-            # Skip those already linked via GRD→SLC
             already_linked = set(mapping_grd_to_slc.values())
             slc_ids_to_match = [s for s in slc_ids if s not in already_linked]
             if slc_ids_to_match:
@@ -767,7 +779,6 @@ class CatalogueUpdater:
                         .otherwise(pl.col("SAFE GRD"))
                         .alias("SAFE GRD")
                     )
-                    # Symmetric update
                     df = df.with_columns(
                         pl.when(pl.col("SAFE GRD") == grd_name)
                         .then(pl.lit(slc_name))
@@ -852,37 +863,128 @@ class CatalogueUpdater:
         except Exception as e:
             logger.error(f"CDSE query failed for {slc_name}: {e}")
             return None
+        
 
-    def find_new_safe(
+    def _get_category_priority(self, category: str) -> int:
+        """Return priority (higher = more important) for category."""
+        priorities = {"undefined": 0, "train": 1, "val": 2, "test": 3}
+        return priorities.get(category.lower(), 0)
+
+    def _compute_category_and_conflicts(
         self,
-        existing_df: pl.DataFrame,
-        slc_listing: str | Path | list[str],
-        grd_listing: str | Path | list[str],
+        df: pl.DataFrame,
+        dataset_metadata: dict[str, dict],
+        output_path: Path | None = None,
     ) -> pl.DataFrame:
-        """Identify SAFE not yet present in the catalogue."""
-        new_raw = self.build_from_listings(slc_listing if isinstance(slc_listing, (str, Path, list, dict)) else [], grd_listing if isinstance(grd_listing, (str, Path, list, dict)) else [])  # type: ignore[arg-type]
-        if existing_df.height == 0:
-            return new_raw
+        """
+        Add dataset_category column based on dataset list and priority hierarchy.
+        Writes conflict report if multiple categories conflict.
+        """
+        # Build mapping: dataset_name -> category
+        dataset_category_map = {}
+        for name, info in dataset_metadata.items():
+            if isinstance(info, dict) and "category" in info:
+                dataset_category_map[name] = info["category"]
+            else:
+                dataset_category_map[name] = "undefined"
 
-        existing_slc = set(
-            existing_df.filter(pl.col("SAFE SLC").is_not_null())["SAFE SLC"].to_list()
-        )
-        existing_grd = set(
-            existing_df.filter(pl.col("SAFE GRD").is_not_null())["SAFE GRD"].to_list()
-        )
+        # Process each row
+        new_categories = []
+        conflicts = []
 
-        new_rows = []
-        for row in new_raw.to_dicts():
-            if row["SAFE SLC"] and row["SAFE SLC"] not in existing_slc:
-                new_rows.append(row)
-            elif row["SAFE GRD"] and row["SAFE GRD"] not in existing_grd:
-                new_rows.append(row)
+        for row in df.to_dicts():
+            datasets = row.get("dataset(s) d'appartenance", [])
+            if not datasets:
+                new_categories.append("undefined")
+                continue
 
-        if not new_rows:
-            logger.info("No new SAFE found.")
-            return pl.DataFrame(schema=SCHEMA)
-        logger.info(f"Found {len(new_rows)} new SAFE entries.")
-        return pl.DataFrame(new_rows, schema=SCHEMA)
+            # Collect unique categories with priorities
+            cat_set = set()
+            for ds in datasets:
+                cat = dataset_category_map.get(ds, "undefined")
+                cat_set.add(cat)
+
+            # If only one category, use it
+            if len(cat_set) == 1:
+                new_categories.append(cat_set.pop())
+            else:
+                # Choose highest priority
+                best_cat = max(cat_set, key=self._get_category_priority)
+                new_categories.append(best_cat)
+
+                # Log conflict if more than one distinct category
+                if len(cat_set) > 1:
+                    safe_name = row.get("SAFE SLC") or row.get("SAFE GRD") or row.get("SAFE OCN")
+                    conflicts.append({
+                        "safe": safe_name,
+                        "datasets": datasets,
+                        "categories": list(cat_set),
+                        "chosen": best_cat,
+                    })
+
+        # Add column
+        df = df.with_columns(pl.Series(new_categories).alias("dataset_category"))
+
+        # Write conflicts if any and output_path provided
+        if conflicts and output_path:
+            self._write_conflicts(conflicts, output_path)
+
+        return df
+
+    def _write_conflicts(self, conflicts: list[dict], catalogue_path: Path) -> None:
+        """Write conflict report to a file in the same directory as the catalogue."""
+        import json
+        from datetime import datetime
+
+        conflict_dir = catalogue_path.parent
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        conflict_file = conflict_dir / f"conflicts_{timestamp}.txt"
+
+        with open(conflict_file, "w") as f:
+            f.write(f"Catalogue: {catalogue_path}\n")
+            f.write(f"Timestamp: {datetime.now().isoformat()}\n")
+            f.write("=" * 60 + "\n")
+            f.write(f"Total conflicts: {len(conflicts)}\n")
+            f.write("-" * 60 + "\n")
+            for c in conflicts:
+                f.write(f"SAFE: {c['safe']}\n")
+                f.write(f"  Datasets: {c['datasets']}\n")
+                f.write(f"  Categories: {c['categories']}\n")
+                f.write(f"  Chosen: {c['chosen']}\n")
+                f.write("\n")
+
+        logger.info(f"Conflict report written to {conflict_file}")
+
+    # def find_new_safe(
+    #     self,
+    #     existing_df: pl.DataFrame,
+    #     slc_listing: str | Path | list[str],
+    #     grd_listing: str | Path | list[str],
+    # ) -> pl.DataFrame:
+    #     """Identify SAFE not yet present in the catalogue."""
+    #     new_raw = self.build_from_listings(slc_listing if isinstance(slc_listing, (str, Path, list, dict)) else [], grd_listing if isinstance(grd_listing, (str, Path, list, dict)) else [])  # type: ignore[arg-type]
+    #     if existing_df.height == 0:
+    #         return new_raw
+
+    #     existing_slc = set(
+    #         existing_df.filter(pl.col("SAFE SLC").is_not_null())["SAFE SLC"].to_list()
+    #     )
+    #     existing_grd = set(
+    #         existing_df.filter(pl.col("SAFE GRD").is_not_null())["SAFE GRD"].to_list()
+    #     )
+
+    #     new_rows = []
+    #     for row in new_raw.to_dicts():
+    #         if row["SAFE SLC"] and row["SAFE SLC"] not in existing_slc:
+    #             new_rows.append(row)
+    #         elif row["SAFE GRD"] and row["SAFE GRD"] not in existing_grd:
+    #             new_rows.append(row)
+
+    #     if not new_rows:
+    #         logger.info("No new SAFE found.")
+    #         return pl.DataFrame(schema=SCHEMA)
+    #     logger.info(f"Found {len(new_rows)} new SAFE entries.")
+    #     return pl.DataFrame(new_rows, schema=SCHEMA)
 
     def _merge_linked_rows(self, df: pl.DataFrame) -> pl.DataFrame:
         """
@@ -983,6 +1085,22 @@ class CatalogueUpdater:
                     presence_ocn_val = val
                     break
             merged["presence OCN"] = presence_ocn_val
+
+
+            # Merge dataset_category: take highest priority
+            cat1 = merged.get("dataset_category")
+            cat2 = rows_list[1].get("dataset_category") if len(rows_list) > 1 else None  # but we need to consider all rows
+            # Actually we should consider all rows in the group:
+            all_cats = []
+            for r in rows_list:
+                cat = r.get("dataset_category")
+                if cat:
+                    all_cats.append(cat)
+            if all_cats:
+                best_cat = max(all_cats, key=self._get_category_priority)
+                merged["dataset_category"] = best_cat
+            else:
+                merged["dataset_category"] = None
 
             merged_rows.append(merged)
 
@@ -1194,7 +1312,7 @@ class CatalogueUpdater:
                             gdf=gdf,
                             timedelta_slice=datetime.timedelta(days=1),
                             top=1000,
-                            querymode="seq",
+                            querymode="multi",
                             cache_dir=(
                                 str(cache_dir) if cache_dir else None
                             ),  # <-- Added cache_dir support

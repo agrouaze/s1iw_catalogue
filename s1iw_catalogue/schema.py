@@ -15,6 +15,7 @@ SCHEMA: dict[str, Any] = {
     "presence L1B XSP A21": pl.Utf8,
     "presence L1C XSP B17": pl.Utf8,
     "dataset(s) d'appartenance": pl.List(pl.Utf8),
+    "dataset_category": pl.List(pl.Utf8),
     "Hs WW3": pl.Float32,
     "Tp WW3": pl.Float32,
     "U10 ecmwf": pl.Float32,
@@ -27,6 +28,7 @@ SCHEMA: dict[str, Any] = {
     "S3path GRD": pl.Utf8,
     "polarization": pl.Utf8,
     "unité": pl.Utf8,
+
 }
 
 

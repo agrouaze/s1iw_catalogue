@@ -42,10 +42,10 @@ class S1IWCatalogue:
     def create(self, output_path: str | Path | None = None) -> None:
         """Create a brand new catalogue from scratch."""
         out_path = Path(output_path) if output_path else self._catalogue_path
-        slc_listings = self._config.get("paths", {}).get("reference_listings", {}).get("slc", {})  # type: ignore[union-attr]
-        grd_listings = self._config.get("paths", {}).get("reference_listings", {}).get("grd", {})  # type: ignore[union-attr]
-        df = self._updater.build_from_listings(slc_listings, grd_listings)
+        reference_listings = self._config.get("paths", {}).get("reference_listings", {})
+        df = self._updater.build_from_listings(reference_listings)
         df = self._updater.link_slc_grd(df)
+        df = self._updater._compute_category_and_conflicts(df, reference_listings, out_path)
         df.write_parquet(out_path, compression="snappy")
         logger.info(f"Catalogue created at {out_path}")
 
@@ -71,11 +71,9 @@ class S1IWCatalogue:
         existing_df = pl.read_parquet(self._catalogue_path)
         logger.info(f"Loaded existing catalogue with {existing_df.height} rows.")
 
-        slc_listings = self._config.get("paths", {}).get("reference_listings", {}).get("slc", {})  # type: ignore[union-attr]
-        grd_listings = self._config.get("paths", {}).get("reference_listings", {}).get("grd", {})  # type: ignore[union-attr]
-
+        reference_listings = self._config.get("paths", {}).get("reference_listings", {})
         logger.info("Building new rows from listings...")
-        new_df = self._updater.build_from_listings(slc_listings, grd_listings)
+        new_df = self._updater.build_from_listings(reference_listings)
         logger.info(f"Built {new_df.height} rows from listings.")
 
         existing_slc = set(
@@ -149,6 +147,13 @@ class S1IWCatalogue:
             append_df = self._updater.link_slc_grd(append_df)
             existing_df = pl.concat([existing_df, append_df], how="vertical_relaxed")
             logger.info(f"Appended {len(rows_to_append)} new rows.")
+
+        # --- Fix: compute category on final DataFrame ---
+        existing_df = self._updater._compute_category_and_conflicts(
+            existing_df,
+            reference_listings,
+            self._catalogue_path  # pass catalogue path for conflict reports
+        )
 
         existing_df = existing_df.unique()
 
