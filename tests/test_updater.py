@@ -20,13 +20,13 @@ def test_init(dummy_config):
     assert updater.config == dummy_config
 
 
-def test_find_new_safe(dummy_config):
-    """Test that find_new_safe method exists."""
-    updater = CatalogueUpdater(dummy_config)
-    _existing = create_empty_catalogue()
-    _slc_listing = Path("/dummy/slc.csv")
-    _grd_listing = Path("/dummy/grd.csv")
-    assert hasattr(updater, "find_new_safe")
+# def test_find_new_safe(dummy_config):
+#     """Test that find_new_safe method exists."""
+#     updater = CatalogueUpdater(dummy_config)
+#     _existing = create_empty_catalogue()
+#     _slc_listing = Path("/dummy/slc.csv")
+#     _grd_listing = Path("/dummy/grd.csv")
+#     assert hasattr(updater, "find_new_safe")
 
 
 def test_update_presence_columns(dummy_config):

@@ -12,6 +12,7 @@ import polars as pl
 from s1iw_catalogue.config import load_config
 from s1iw_catalogue.schema import create_empty_catalogue
 from s1iw_catalogue.updater import CatalogueUpdater
+from s1iw_catalogue.stats import CatalogueStats
 
 # Set up module-level logger
 logger = logging.getLogger(__name__)
@@ -50,7 +51,6 @@ class S1IWCatalogue:
             self._config = load_config() if config is None else config
 
         self._updater = CatalogueUpdater(self._config)  # type: ignore[arg-type]
-
 
     def _write_parquet_with_metadata(self, df: pl.DataFrame, path: Path) -> None:
         try:
@@ -208,14 +208,21 @@ class S1IWCatalogue:
         logger.info(f"Update complete. Final catalogue has {existing_df.height} rows.")
         logger.info(f"Path: {self._catalogue_path}")
 
-    def stats(
-        self,
-        dataset: str | None = None,
-        verbose: bool = False,
-        output: str | Path | None = None,
-    ) -> dict[str, Any]:
-        # TODO: implement stats
-        return {}
+    def stats(self, dataset: str | None = None, verbose: bool = False, output: str | Path | None = None) -> dict[str, Any]:
+        df = self._load_catalogue()
+        if dataset:
+            df = df.filter(pl.col("dataset(s) d'appartenance").list.contains(dataset))
+            if df.height == 0:
+                logger.warning(f"No products found for dataset '{dataset}'")
+                return {}
+        stats_obj = CatalogueStats(df)
+        result = stats_obj.to_dict()
+        if output:
+            stats_obj.to_json(Path(output))
+            logger.info(f"Statistics exported to {output}")
+        if verbose:
+            print(stats_obj.to_string())
+        return result
 
     def backup(self, backup_dir: str | Path | None = None) -> Path:
         # TODO: implement backup
@@ -229,7 +236,10 @@ class S1IWCatalogue:
         return create_empty_catalogue()
 
     def _load_catalogue(self) -> pl.DataFrame:
-        return create_empty_catalogue()
+        """Load the catalogue from the stored path."""
+        if not self._catalogue_path.exists():
+            raise FileNotFoundError(f"Catalogue not found: {self._catalogue_path}")
+        return pl.read_parquet(self._catalogue_path)
 
     def _save_catalogue(self, df: pl.DataFrame) -> None:
         pass

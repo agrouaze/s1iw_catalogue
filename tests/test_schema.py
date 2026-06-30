@@ -18,6 +18,7 @@ def test_schema_dict_has_all_columns():
         "presence L1B XSP A21",
         "presence L1C XSP B17",
         "dataset(s) d'appartenance",
+        "dataset_category",
         "Hs WW3",
         "Tp WW3",
         "U10 ecmwf",
