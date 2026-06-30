@@ -36,8 +36,6 @@ def test_update_presence_columns(dummy_config):
     assert hasattr(updater, "_update_presence_columns")
 
 
-
-
 def test_update_meteorology(dummy_config):
     """Test that update_meteorology method exists."""
     updater = CatalogueUpdater(dummy_config)
