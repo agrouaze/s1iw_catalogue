@@ -12,9 +12,6 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  # Many color libraries just need this variable to be set to any value.
-  # Set it to 3 to support 8-bit color graphics (256 colors per channel)
-  # for libraries that care about the value set.
   FORCE_COLOR: 3
 
 jobs:
@@ -26,19 +23,19 @@ jobs:
         with:
           fetch-depth: 0
 
-       - uses: actions/setup-python@v6
-         with:
-           python-version: "3.x"
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.x"
 
-       - uses: astral-sh/setup-uv@v7
+      - uses: astral-sh/setup-uv@v7
 
-       - name: Install private dependencies (s1ifr)
-         run: uv pip install s1ifr --extra-index-url https://__token__:${{ secrets.S1IFR_ACCESS_TOKEN }}@gitlab.ifremer.fr/api/v4/projects/4991/packages/pypi/simple
+      - name: Install private dependencies (s1ifr)
+        run: uv pip install s1ifr --extra-index-url https://__token__:${{ secrets.S1IFR_PYPI_TOKEN }}@gitlab.ifremer.fr/api/v4/projects/4991/packages/pypi/simple
 
-       - uses: j178/prek-action@v2
+      - uses: j178/prek-action@v2
 
-       - name: Run Pylint
-         run: uvx nox -s pylint -- --output-format=github
+      - name: Run Pylint
+        run: uvx nox -s pylint -- --output-format=github
 
   checks:
     name: Check Python ${{ matrix.python-version }} on ${{ matrix.runs-on }}
@@ -47,15 +44,10 @@ jobs:
       fail-fast: false
       matrix:
         python-version: ["3.10", "3.14"]
-
-
-
-         runs-on: [ubuntu-latest]
-
+        runs-on: [ubuntu-latest]
         # include:
         #   - python-version: "pypy-3.11"
         #     runs-on: ubuntu-latest
-
 
     steps:
       - uses: actions/checkout@v7
@@ -71,11 +63,11 @@ jobs:
 
       - name: Install package
         env:
-          UV_EXTRA_INDEX_URL: "https://__token__:${{ secrets.IFREMER_PYPI_TOKEN }}@gitlab.ifremer.fr/api/v4/projects/4991/packages/pypi/simple"
+          UV_EXTRA_INDEX_URL: "https://__token__:${{ secrets.S1IFR_PYPI_TOKEN }}@gitlab.ifremer.fr/api/v4/projects/4991/packages/pypi/simple"
         run: uv sync --all-extras
 
       - name: Test package
-        run: >-
+        run: >
           uv run pytest -ra --cov --cov-report=xml --cov-report=term
           --durations=20
 
