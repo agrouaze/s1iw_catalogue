@@ -45,11 +45,6 @@ jobs:
       matrix:
         python-version: ["3.10", "3.14"]
         runs-on: [ubuntu-latest, windows-latest, macos-latest, macos-15-intel]
-
-        # include:
-        #   - python-version: "pypy-3.11"
-        #     runs-on: ubuntu-latest
-
     steps:
       - uses: actions/checkout@v6
         with:
@@ -63,6 +58,8 @@ jobs:
       - uses: astral-sh/setup-uv@v7
 
       - name: Install package
+        env:
+          UV_EXTRA_INDEX_URL: "https://__token__:${{ secrets.IFREMER_PYPI_TOKEN }}@gitlab.ifremer.fr/api/v4/projects/4991/packages/pypi/simple"
         run: uv sync --all-extras
 
       - name: Test package
