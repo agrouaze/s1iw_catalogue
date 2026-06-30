@@ -27,7 +27,7 @@ SCHEMA: dict[str, Any] = {
     "S3path GRD": pl.Utf8,
     "polarization": pl.Utf8,
     "unité": pl.Utf8,
-
+}
 
 
 def validate_schema(df: pl.DataFrame) -> bool:

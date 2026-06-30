@@ -5,12 +5,13 @@ from typing import Any, Dict, List, Optional, Tuple
 import datetime
 import logging
 import re
+import os
 import time
 from collections import defaultdict
 from pathlib import Path
-
+import hashlib
 import polars as pl
-
+import contextlib
 from s1iw_catalogue.schema import SCHEMA
 
 # Set up module-level logger
@@ -398,6 +399,54 @@ class CatalogueUpdater:
 
         return df
 
+
+
+
+    def _batch_cdse_match(
+        self,
+        source_ids: list[str],
+        target_type: str,
+        output_file: str | None = None,
+        checkpoint_dir: Path | None = None,
+        cleanup_on_success: bool = False,
+    ) -> dict[str, str]:
+        if not source_ids:
+            return {}
+
+        from cdsodatacli.scripts.match_s1_product_types import entrypoint
+
+        if checkpoint_dir is None:
+            checkpoint_dir = self._get_checkpoint_dir()
+
+        if output_file is None:
+            # Deterministic filename based on sorted IDs and target type
+            sorted_ids = sorted(source_ids)
+            hash_obj = hashlib.md5(''.join(sorted_ids).encode())
+            hash_hex = hash_obj.hexdigest()[:8]
+            output_file = f"batch_{target_type}_{hash_hex}.txt"
+            # Place it in the checkpoint directory (or temp)
+            output_file = str(Path(checkpoint_dir) / output_file) if checkpoint_dir else output_file
+
+        results = entrypoint(
+            safe_list=source_ids,
+            target_type=target_type,
+            output_filename=output_file,
+            logger=logger,
+            checkpoint_dir=str(checkpoint_dir) if checkpoint_dir else None,
+        )
+
+        mapping = {}
+        for r in results:
+            if "target_name" in r and "source_id" in r:
+                mapping[r["source_id"]] = r["target_name"]
+
+        # Optionally remove the output file if you don't need it
+        if output_file and Path(output_file).exists():
+            Path(output_file).unlink()
+
+        return mapping
+
+
     def _local_link_slc_grd(self, df: pl.DataFrame) -> pl.DataFrame | None:
         """
         Match SLC and GRD using data take ID (relative_orbit + orbit_number).
@@ -628,7 +677,7 @@ class CatalogueUpdater:
         Convert GRD naming pattern to expected SLC pattern with a time offset.
         offset_seconds can be negative or positive.
         """
-        slc_name = grd_name.replace("_GRDH_", "_SLC__").replace("_GRD_", "_SLC_")
+        slc_name = grd_name.replace("_GRDH_", "_SLC__").replace("_GRDH", "_SLC_")
 
         def adjust_timestamp(match):
             dt = datetime.datetime.strptime(match.group(0), "%Y%m%dT%H%M%S")
@@ -645,7 +694,7 @@ class CatalogueUpdater:
         Convert SLC naming pattern to expected GRD pattern with a time offset.
         offset_seconds can be negative or positive.
         """
-        grd_name = slc_name.replace("_SLC__", "_GRDH_").replace("_SLC_", "_GRD_")
+        grd_name = slc_name.replace("_SLC__", "_GRDH_").replace("_SLC_", "_GRDH")
 
         def adjust_timestamp(match):
             dt = datetime.datetime.strptime(match.group(0), "%Y%m%dT%H%M%S")
@@ -658,6 +707,7 @@ class CatalogueUpdater:
     def _cdse_fallback_link(self, df: pl.DataFrame) -> pl.DataFrame:
         """
         For rows still missing links, query CDSE using cdsodatacli.
+        Now uses the multithreaded entrypoint for GRD→SLC and SLC→GRD in batches.
         """
         logger.info("Step 2: CDSE fallback for orphan products...")
 
@@ -677,67 +727,55 @@ class CatalogueUpdater:
             f"Found {grd_orphans.height} GRD orphans and {slc_orphans.height} SLC orphans (total {total_orphans})"
         )
 
-        # Process GRD orphans
-        updates_grd = {}
-        for row in grd_orphans.to_dicts():
-            grd_name = row["SAFE GRD"]
-            try:
-                slc_name = self._call_cdse_get_parent_slc(grd_name)
-                if slc_name:
-                    updates_grd[grd_name] = slc_name
-                    logger.info(f"CDSE found parent SLC for {grd_name} -> {slc_name}")
-                else:
-                    logger.warning(f"CDSE could not find SLC for {grd_name}")
-            except Exception as e:
-                logger.error(f"CDSE error for {grd_name}: {e}")
+        # Process GRD→SLC in batch
+        if grd_orphans.height > 0:
+            grd_ids = [row["SAFE GRD"] for row in grd_orphans.to_dicts()]
+            logger.info(f"Batch matching {len(grd_ids)} GRD orphans to SLC...")
+            mapping_grd_to_slc = self._batch_cdse_match(grd_ids, "SLC_")
+            logger.info(f"Found SLC for {len(mapping_grd_to_slc)}/{len(grd_ids)} GRD orphans")
+            for grd_name, slc_name in mapping_grd_to_slc.items():
+                df = df.with_columns(
+                    pl.when(pl.col("SAFE GRD") == grd_name)
+                    .then(pl.lit(slc_name))
+                    .otherwise(pl.col("SAFE SLC"))
+                    .alias("SAFE SLC")
+                )
+                # Also update the SLC row if it exists (symmetric)
+                df = df.with_columns(
+                    pl.when(pl.col("SAFE SLC") == slc_name)
+                    .then(pl.lit(grd_name))
+                    .otherwise(pl.col("SAFE GRD"))
+                    .alias("SAFE GRD")
+                )
 
-        # Apply updates for GRD orphans (code unchanged)
-        for grd_name, slc_name in updates_grd.items():
-            df = df.with_columns(
-                pl.when(pl.col("SAFE GRD") == grd_name)
-                .then(pl.lit(slc_name))
-                .otherwise(pl.col("SAFE SLC"))
-                .alias("SAFE SLC")
-            )
-            df = df.with_columns(
-                pl.when(pl.col("SAFE SLC") == slc_name)
-                .then(pl.lit(grd_name))
-                .otherwise(pl.col("SAFE GRD"))
-                .alias("SAFE GRD")
-            )
+        # Process SLC→GRD in batch
+        if slc_orphans.height > 0:
+            slc_ids = [row["SAFE SLC"] for row in slc_orphans.to_dicts()]
+            # Skip those already linked via GRD→SLC
+            already_linked = set(mapping_grd_to_slc.values())
+            slc_ids_to_match = [s for s in slc_ids if s not in already_linked]
+            if slc_ids_to_match:
+                logger.info(f"Batch matching {len(slc_ids_to_match)} SLC orphans to GRD...")
+                mapping_slc_to_grd = self._batch_cdse_match(slc_ids_to_match, "GRDH")
+                logger.info(
+                    f"Found GRD for {len(mapping_slc_to_grd)}/{len(slc_ids_to_match)} SLC orphans"
+                )
+                for slc_name, grd_name in mapping_slc_to_grd.items():
+                    df = df.with_columns(
+                        pl.when(pl.col("SAFE SLC") == slc_name)
+                        .then(pl.lit(grd_name))
+                        .otherwise(pl.col("SAFE GRD"))
+                        .alias("SAFE GRD")
+                    )
+                    # Symmetric update
+                    df = df.with_columns(
+                        pl.when(pl.col("SAFE GRD") == grd_name)
+                        .then(pl.lit(slc_name))
+                        .otherwise(pl.col("SAFE SLC"))
+                        .alias("SAFE SLC")
+                    )
 
-        # Process SLC orphans
-        updates_slc = {}
-        for row in slc_orphans.to_dicts():
-            slc_name = row["SAFE SLC"]
-            if any(grd for grd, slc in updates_grd.items() if slc == slc_name):
-                continue
-            try:
-                grd_name = self._call_cdse_get_derived_grd(slc_name)
-                if grd_name:
-                    updates_slc[slc_name] = grd_name
-                    logger.debug(f"CDSE found derived GRD for {slc_name} -> {grd_name}")
-                else:
-                    logger.warning(f"CDSE could not find GRD for {slc_name}")
-            except Exception as e:
-                logger.error(f"CDSE error for {slc_name}: {e}")
-
-        # Apply updates for SLC orphans (code unchanged)
-        for slc_name, grd_name in updates_slc.items():
-            df = df.with_columns(
-                pl.when(pl.col("SAFE SLC") == slc_name)
-                .then(pl.lit(grd_name))
-                .otherwise(pl.col("SAFE GRD"))
-                .alias("SAFE GRD")
-            )
-            df = df.with_columns(
-                pl.when(pl.col("SAFE GRD") == grd_name)
-                .then(pl.lit(slc_name))
-                .otherwise(pl.col("SAFE SLC"))
-                .alias("SAFE SLC")
-            )
-
-        total_updates = len(updates_grd) + len(updates_slc)
+        total_updates = len(mapping_grd_to_slc) + len(mapping_slc_to_grd)
         resolved_percentage = (
             (total_updates / total_orphans * 100) if total_orphans > 0 else 0.0
         )
@@ -791,7 +829,7 @@ class CatalogueUpdater:
             logger.warning(f"cdsodatacli not installed: {e}. CDSE fallback disabled.")
             return None
 
-        target_type = "GRD_"  # Valid type for GRD
+        target_type = "GRDH"  # Valid type for GRD
         delta_dist: defaultdict[str, int] = defaultdict(int)
 
         try:
@@ -870,12 +908,6 @@ class CatalogueUpdater:
         logger.info(f"Found {linked_rows.height} rows with both SLC and GRD.")
         logger.info(f"Keeping {unlinked_rows.height} unlinked rows unchanged.")
 
-        # For dataset merging, we need to handle empty lists carefully.
-        # First, create a temporary column with all datasets concatenated
-        # Then explode, get unique, and aggregate back
-
-        # Convert the linked rows to a list of dictionaries and process manually
-        # This is simpler and more reliable for this specific operation
         rows = linked_rows.to_dicts()
 
         merged_rows = []
@@ -933,8 +965,24 @@ class CatalogueUpdater:
                         merged[poly_col] = val
                         break
 
-            # SAFE OCN is always None
-            merged["SAFE OCN"] = None
+            # --- FIX: Merge OCN-related columns by taking first non-null ---
+            # SAFE OCN: first non-null from any row
+            safe_ocn_val = None
+            for r in rows_list:
+                val = r.get("SAFE OCN")
+                if val is not None:
+                    safe_ocn_val = val
+                    break
+            merged["SAFE OCN"] = safe_ocn_val
+
+            # presence OCN: first non-null from any row
+            presence_ocn_val = None
+            for r in rows_list:
+                val = r.get("presence OCN")
+                if val is not None:
+                    presence_ocn_val = val
+                    break
+            merged["presence OCN"] = presence_ocn_val
 
             merged_rows.append(merged)
 
@@ -1030,7 +1078,6 @@ class CatalogueUpdater:
         try:
             import geopandas as gpd
             import pandas as pd
-            import shapely
             from cdsodatacli.query import fetch_data
             from shapely.geometry import box
         except ImportError as e:
@@ -1098,7 +1145,7 @@ class CatalogueUpdater:
                     parsed = self.parse_safe_name(safe_name)
                     start_date = parsed["start_date"]
                     end_date = parsed["end_date"]
-                    mission = parsed["mission"]
+                    # mission = parsed["mission"]
                     product_type = parsed["product_type"]
 
                     # Explicitly set the product type filter to match the product type
@@ -1141,16 +1188,18 @@ class CatalogueUpdater:
 
             try:
                 # Pass cache_dir to fetch_data if configured
-                result_df = fetch_data(
-                    gdf=gdf,
-                    timedelta_slice=datetime.timedelta(days=1),
-                    top=1000,
-                    querymode="seq",
-                    cache_dir=(
-                        str(cache_dir) if cache_dir else None
-                    ),  # <-- Added cache_dir support
-                    display_tqdm=False,
-                )
+                with open(os.devnull, 'w') as devnull:
+                    with contextlib.redirect_stdout(devnull):
+                        result_df = fetch_data(
+                            gdf=gdf,
+                            timedelta_slice=datetime.timedelta(days=1),
+                            top=1000,
+                            querymode="seq",
+                            cache_dir=(
+                                str(cache_dir) if cache_dir else None
+                            ),  # <-- Added cache_dir support
+                            display_tqdm=False,
+                        )
                 if result_df is not None and not result_df.empty:
                     all_results.append(result_df)
                     logger.info(
@@ -1285,6 +1334,16 @@ class CatalogueUpdater:
 
         return df
 
+    def _get_checkpoint_dir(self) -> Path | None:
+        """Return a checkpoint directory path based on the catalogue output path."""
+        catalogue_path = self.config.get("paths", {}).get("output", {}).get("catalogue")
+        if not catalogue_path:
+            return None
+        base_dir = Path(catalogue_path).parent
+        checkpoint_dir = base_dir / "checkpoints"
+        checkpoint_dir.mkdir(parents=True, exist_ok=True)
+        return checkpoint_dir
+    
     # ---------- Placeholders for future implementation ----------
     def _update_presence_columns(
         self, df: pl.DataFrame, force: bool = False
@@ -1318,7 +1377,7 @@ class CatalogueUpdater:
                 if "paths" in s1ifr_config:
                     potential_archives = ["datawork", "scale"]
                     for key in s1ifr_config["paths"].keys():
-<<<<<<< HEAD
+
                         if key not in potential_archives and isinstance(
                             s1ifr_config["paths"][key], dict
                         ):
@@ -1327,10 +1386,8 @@ class CatalogueUpdater:
                                 "archive" in k.lower()
                                 for k in s1ifr_config["paths"][key].keys()
                             ):
-=======
-                        if key not in potential_archives and isinstance(s1ifr_config["paths"][key], dict):
-                            if any("archive" in k.lower() for k in s1ifr_config["paths"][key].keys()):
->>>>>>> origin/main
+
+
                                 potential_archives.append(key)
                     archive_names = potential_archives
                     logger.info(f"Found archives in s1ifr config: {archive_names}")
@@ -1351,14 +1408,7 @@ class CatalogueUpdater:
             grd_rows = df.filter(
                 pl.col("SAFE GRD").is_not_null() & pl.col("presence GRD").is_null()
             )
-<<<<<<< HEAD
 
-        logger.info(
-            f"Checking presence for {slc_rows.height} SLC and {grd_rows.height} GRD products."
-        )
-
-        def find_product_path(safe_name: str, product_type: str) -> str | None:
-=======
             ocn_rows = df.filter(  # <-- ADDED
                 pl.col("SAFE OCN").is_not_null() & pl.col("presence OCN").is_null()
             )
@@ -1366,7 +1416,6 @@ class CatalogueUpdater:
         logger.info(f"Checking presence for {slc_rows.height} SLC, {grd_rows.height} GRD, and {ocn_rows.height} OCN products.")
         
         def find_product_path(safe_name: str, product_type: str) -> Optional[str]:
->>>>>>> origin/main
             """Find product path by checking all archives sequentially."""
             for archive_name in archive_names:
                 try:
@@ -1398,9 +1447,6 @@ class CatalogueUpdater:
         for row in grd_rows.to_dicts():
             safe_name = row["SAFE GRD"]
             grd_presence[safe_name] = find_product_path(safe_name, "GRD")
-<<<<<<< HEAD
-
-=======
         
         # Check OCN products  # <-- ADDED
         ocn_presence = {}
@@ -1408,7 +1454,6 @@ class CatalogueUpdater:
             safe_name = row["SAFE OCN"]
             ocn_presence[safe_name] = find_product_path(safe_name, "OCN")
         
->>>>>>> origin/main
         # Update SLC presence column
         df = df.with_columns(
             pl.when(
@@ -1444,19 +1489,6 @@ class CatalogueUpdater:
             .otherwise(pl.col("presence GRD"))
             .alias("presence GRD")
         )
-<<<<<<< HEAD
-
-        # Count how many were found
-        found_slc = df.filter(
-            pl.col("SAFE SLC").is_not_null() & pl.col("presence SLC").is_not_null()
-        ).height
-        found_grd = df.filter(
-            pl.col("SAFE GRD").is_not_null() & pl.col("presence GRD").is_not_null()
-        ).height
-        total_slc = df.filter(pl.col("SAFE SLC").is_not_null()).height
-        total_grd = df.filter(pl.col("SAFE GRD").is_not_null()).height
-
-=======
         
         # Update OCN presence column  # <-- ADDED
         df = df.with_columns(
@@ -1484,23 +1516,15 @@ class CatalogueUpdater:
         total_grd = df.filter(pl.col("SAFE GRD").is_not_null()).height
         total_ocn = df.filter(pl.col("SAFE OCN").is_not_null()).height  # <-- ADDED
         
->>>>>>> origin/main
         if total_slc > 0:
             logger.info(
                 f"Found {found_slc}/{total_slc} SLC products on Ifremer storage ({found_slc/total_slc*100:.1f}%)"
             )
         if total_grd > 0:
-<<<<<<< HEAD
-            logger.info(
-                f"Found {found_grd}/{total_grd} GRD products on Ifremer storage ({found_grd/total_grd*100:.1f}%)"
-            )
-
-=======
             logger.info(f"Found {found_grd}/{total_grd} GRD products on Ifremer storage ({found_grd/total_grd*100:.1f}%)")
         if total_ocn > 0:  # <-- ADDED
             logger.info(f"Found {found_ocn}/{total_ocn} OCN products on Ifremer storage ({found_ocn/total_ocn*100:.1f}%)")
         
->>>>>>> origin/main
         return df
 
     def _update_derived_products(self, df: pl.DataFrame) -> pl.DataFrame:
@@ -1647,8 +1671,9 @@ class CatalogueUpdater:
         
         # Find GRD rows without OCN
         grd_without_ocn = df.filter(
-            pl.col("SAFE GRD").is_not_null() & 
-            pl.col("SAFE OCN").is_null()
+            pl.col("SAFE GRD").is_not_null() &
+            pl.col("SAFE OCN").is_null() &
+            (pl.col("presence OCN").is_null() | (pl.col("presence OCN") != "NOT_FOUND"))
         )
         
         if grd_without_ocn.height == 0:
@@ -1669,6 +1694,13 @@ class CatalogueUpdater:
                     updates[grd_name] = ocn_name
                     logger.debug(f"CDSE found OCN for GRD {grd_name} -> {ocn_name}")
                 else:
+                    # Mark as not found
+                    df = df.with_columns(
+                        pl.when(pl.col("SAFE GRD") == grd_name)
+                        .then(pl.lit("NOT_FOUND"))
+                        .otherwise(pl.col("presence OCN"))
+                        .alias("presence OCN")
+                    )
                     logger.warning(f"CDSE could not find OCN for GRD {grd_name}")
             except Exception as e:
                 logger.error(f"Error linking OCN for GRD {grd_name}: {e}")
@@ -1693,8 +1725,10 @@ class CatalogueUpdater:
         
         # Find SLC rows without OCN
         slc_without_ocn = df.filter(
-            pl.col("SAFE SLC").is_not_null() & 
-            pl.col("SAFE OCN").is_null()
+            pl.col("SAFE SLC").is_not_null() &
+            pl.col("SAFE GRD").is_null() &          # <-- Only SLC-only rows
+            pl.col("SAFE OCN").is_null() &
+            (pl.col("presence OCN").is_null() | (pl.col("presence OCN") != "NOT_FOUND"))
         )
         
         if slc_without_ocn.height == 0:

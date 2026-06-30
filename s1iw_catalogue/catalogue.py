@@ -2,16 +2,19 @@
 
 from __future__ import annotations
 
-from typing import Any, Optional
-
 import datetime
+import logging
 from pathlib import Path
+from typing import Any, Optional
 
 import polars as pl
 
 from s1iw_catalogue.config import load_config
 from s1iw_catalogue.schema import create_empty_catalogue
 from s1iw_catalogue.updater import CatalogueUpdater
+
+# Set up module-level logger
+logger = logging.getLogger(__name__)
 
 
 class S1IWCatalogue:
@@ -37,7 +40,7 @@ class S1IWCatalogue:
         df = self._updater.link_slc_grd(df)
         # Write to Parquet
         df.write_parquet(out_path, compression="snappy")
-        print(f"Catalogue created at {out_path}")
+        logger.info(f"Catalogue created at {out_path}")
 
     def update(self, force_meteo_refresh: bool = False) -> None:
         """
@@ -52,24 +55,24 @@ class S1IWCatalogue:
         - New rows: append with full pipeline
         - Rows that become linked: merge and update horodating
         """
-        print(f"Updating catalogue at {self._catalogue_path}...")
+        logger.info(f"Updating catalogue at {self._catalogue_path}...")
 
         # 1. Load existing catalogue
         if not self._catalogue_path.exists():
-            print(f"Error: Catalogue file not found: {self._catalogue_path}")
+            logger.error(f"Catalogue file not found: {self._catalogue_path}")
             return
 
         existing_df = pl.read_parquet(self._catalogue_path)
-        print(f"Loaded existing catalogue with {existing_df.height} rows.")
+        logger.info(f"Loaded existing catalogue with {existing_df.height} rows.")
 
         # 2. Read new listings from config
         slc_listings = self._config.get("paths", {}).get("reference_listings", {}).get("slc", {})  # type: ignore[union-attr]
         grd_listings = self._config.get("paths", {}).get("reference_listings", {}).get("grd", {})  # type: ignore[union-attr]
 
         # 3. Build new rows from listings (raw, not linked yet)
-        print("Building new rows from listings...")
+        logger.info("Building new rows from listings...")
         new_df = self._updater.build_from_listings(slc_listings, grd_listings)
-        print(f"Built {new_df.height} rows from listings.")
+        logger.info(f"Built {new_df.height} rows from listings.")
 
         # 4. Identify existing SAFE names for lookup
         existing_slc = set(
@@ -95,7 +98,7 @@ class S1IWCatalogue:
             else:
                 rows_to_append.append(row)
 
-        print(
+        logger.info(
             f"Found {len(rows_to_merge)} existing rows to merge, {len(rows_to_append)} new rows to append."
         )
 
@@ -153,7 +156,7 @@ class S1IWCatalogue:
             # This will update presence, polygons, etc. for rows that were missing them
             merged = self._updater.link_slc_grd(merged)
             existing_df = merged
-            print(f"Merged {len(rows_to_merge)} existing rows.")
+            logger.info(f"Merged {len(rows_to_merge)} existing rows.")
 
         # 7. Append new rows: run full pipeline
         if rows_to_append:
@@ -162,7 +165,7 @@ class S1IWCatalogue:
             append_df = self._updater.link_slc_grd(append_df)
             # Append to existing
             existing_df = pl.concat([existing_df, append_df], how="vertical_relaxed")
-            print(f"Appended {len(rows_to_append)} new rows.")
+            logger.info(f"Appended {len(rows_to_append)} new rows.")
 
         # 8. Deduplicate (just in case)
         existing_df = existing_df.unique()
@@ -172,7 +175,8 @@ class S1IWCatalogue:
         existing_df.write_parquet(temp_path, compression="snappy")
         temp_path.rename(self._catalogue_path)
 
-        print(f"Update complete. Final catalogue has {existing_df.height} rows.")
+        logger.info(f"Update complete. Final catalogue has {existing_df.height} rows.")
+        logger.info(f"Path: {self._catalogue_path}")
 
     def stats(
         self,
