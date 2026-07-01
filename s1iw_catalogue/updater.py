@@ -217,7 +217,7 @@ class CatalogueUpdater:
                 if df_raw.height > 0:
                     df_raw = df_raw.with_columns(
                         pl.lit([name], dtype=pl.List(pl.Utf8)).alias(
-                            "dataset(s) d'appartenance"
+                            "datasets"
                         )
                     )
                     slc_dfs.append(df_raw)
@@ -234,7 +234,7 @@ class CatalogueUpdater:
                     "product_type": pl.Utf8,
                     "polarization": pl.Utf8,
                     "start_date": pl.Datetime,
-                    "dataset(s) d'appartenance": pl.List(pl.Utf8),
+                    "datasets": pl.List(pl.Utf8),
                 }
             )
         else:
@@ -245,12 +245,12 @@ class CatalogueUpdater:
             pl.lit(None, dtype=pl.Utf8).alias("SAFE GRD"),
             pl.lit(None, dtype=pl.Utf8).alias("SAFE OCN"),
             pl.col("safe_name").alias("SAFE SLC"),
-            pl.lit(None, dtype=pl.Utf8).alias("presence SLC"),
-            pl.lit(None, dtype=pl.Utf8).alias("presence GRD"),
-            pl.lit(None, dtype=pl.Utf8).alias("presence OCN"),
-            pl.lit(None, dtype=pl.Utf8).alias("dataset_category"),
-            pl.lit(None, dtype=pl.Utf8).alias("presence L1B XSP A21"),
-            pl.lit(None, dtype=pl.Utf8).alias("presence L1C XSP B17"),
+            pl.lit(None, dtype=pl.Utf8).alias("PATH SLC"),
+            pl.lit(None, dtype=pl.Utf8).alias("PATH GRD"),
+            pl.lit(None, dtype=pl.Utf8).alias("PATH OCN"),
+            pl.lit(None, dtype=pl.Utf8).alias("category"),
+            pl.lit(None, dtype=pl.Utf8).alias("PATH L1B XSP A21"),
+            pl.lit(None, dtype=pl.Utf8).alias("PATH L1C XSP B17"),
             pl.lit(None, dtype=pl.Float32).alias("Hs WW3"),
             pl.lit(None, dtype=pl.Float32).alias("Tp WW3"),
             pl.lit(None, dtype=pl.Float32).alias("U10 ecmwf"),
@@ -262,7 +262,7 @@ class CatalogueUpdater:
             pl.lit(None, dtype=pl.Utf8).alias("S3path SLC"),
             pl.lit(None, dtype=pl.Utf8).alias("S3path GRD"),
             pl.col("polarization").alias("polarization"),
-            pl.col("mission").alias("unité"),
+            pl.col("mission").alias("unit"),
         ).select(list(SCHEMA.keys()))
 
         # ---------- Build GRD rows ----------
@@ -275,7 +275,7 @@ class CatalogueUpdater:
                 if df_raw.height > 0:
                     df_raw = df_raw.with_columns(
                         pl.lit([name], dtype=pl.List(pl.Utf8)).alias(
-                            "dataset(s) d'appartenance"
+                            "datasets"
                         )
                     )
                     grd_dfs.append(df_raw)
@@ -292,7 +292,7 @@ class CatalogueUpdater:
                     "product_type": pl.Utf8,
                     "polarization": pl.Utf8,
                     "start_date": pl.Datetime,
-                    "dataset(s) d'appartenance": pl.List(pl.Utf8),
+                    "datasets": pl.List(pl.Utf8),
                 }
             )
         else:
@@ -303,12 +303,12 @@ class CatalogueUpdater:
             pl.col("safe_name").alias("SAFE GRD"),
             pl.lit(None, dtype=pl.Utf8).alias("SAFE SLC"),
             pl.lit(None, dtype=pl.Utf8).alias("SAFE OCN"),
-            pl.lit(None, dtype=pl.Utf8).alias("presence SLC"),
-            pl.lit(None, dtype=pl.Utf8).alias("presence GRD"),
-            pl.lit(None, dtype=pl.Utf8).alias("presence OCN"),
-            pl.lit(None, dtype=pl.Utf8).alias("dataset_category"),
-            pl.lit(None, dtype=pl.Utf8).alias("presence L1B XSP A21"),
-            pl.lit(None, dtype=pl.Utf8).alias("presence L1C XSP B17"),
+            pl.lit(None, dtype=pl.Utf8).alias("PATH SLC"),
+            pl.lit(None, dtype=pl.Utf8).alias("PATH GRD"),
+            pl.lit(None, dtype=pl.Utf8).alias("PATH OCN"),
+            pl.lit(None, dtype=pl.Utf8).alias("category"),
+            pl.lit(None, dtype=pl.Utf8).alias("PATH L1B XSP A21"),
+            pl.lit(None, dtype=pl.Utf8).alias("PATH L1C XSP B17"),
             pl.lit(None, dtype=pl.Float32).alias("Hs WW3"),
             pl.lit(None, dtype=pl.Float32).alias("Tp WW3"),
             pl.lit(None, dtype=pl.Float32).alias("U10 ecmwf"),
@@ -320,7 +320,7 @@ class CatalogueUpdater:
             pl.lit(None, dtype=pl.Utf8).alias("S3path SLC"),
             pl.lit(None, dtype=pl.Utf8).alias("S3path GRD"),
             pl.col("polarization").alias("polarization"),
-            pl.col("mission").alias("unité"),
+            pl.col("mission").alias("unit"),
         ).select(list(SCHEMA.keys()))
 
         # ---------- Combine and deduplicate ----------
@@ -559,7 +559,7 @@ class CatalogueUpdater:
             {}
         )  # (mission, pol, data_take_id) -> list of (slc_name, start_time)
         for row in slc_rows.to_dicts():
-            mission = row.get("unité", "")
+            mission = row.get("unit", "")
             pol = row.get("polarization", "")
             data_take_id = row.get("data_take_id", "")
             start_time = row.get("start_time")
@@ -581,7 +581,7 @@ class CatalogueUpdater:
         # For each GRD, find best matching SLC
         for grd_row in grd_rows.to_dicts():
             grd_name = grd_row["SAFE GRD"]
-            grd_mission = grd_row.get("unité", "")
+            grd_mission = grd_row.get("unit", "")
             grd_pol = grd_row.get("polarization", "")
             grd_data_take_id = grd_row.get("data_take_id", "")
             grd_start_time = grd_row.get("start_time")
@@ -885,23 +885,23 @@ class CatalogueUpdater:
         output_path: Path | None = None,
     ) -> pl.DataFrame:
         """
-        Add dataset_category column based on dataset list and priority hierarchy.
+        Add category column based on dataset list and priority hierarchy.
         Writes conflict report if multiple categories conflict.
         """
         # Build mapping: dataset_name -> category
-        dataset_category_map = {}
+        category_map = {}
         for name, info in dataset_metadata.items():
             if isinstance(info, dict) and "category" in info:
-                dataset_category_map[name] = info["category"]
+                category_map[name] = info["category"]
             else:
-                dataset_category_map[name] = "undefined"
+                category_map[name] = "undefined"
 
         # Process each row
         new_categories = []
         conflicts = []
 
         for row in df.to_dicts():
-            datasets = row.get("dataset(s) d'appartenance", [])
+            datasets = row.get("datasets", [])
             if not datasets:
                 new_categories.append("undefined")
                 continue
@@ -909,7 +909,7 @@ class CatalogueUpdater:
             # Collect unique categories with priorities
             cat_set = set()
             for ds in datasets:
-                cat = dataset_category_map.get(ds, "undefined")
+                cat = category_map.get(ds, "undefined")
                 cat_set.add(cat)
 
             # If only one category, use it
@@ -931,7 +931,7 @@ class CatalogueUpdater:
                     })
 
         # Add column
-        df = df.with_columns(pl.Series(new_categories).alias("dataset_category"))
+        df = df.with_columns(pl.Series(new_categories).alias("category"))
 
         # Write conflicts if any and output_path provided
         if conflicts and output_path:
@@ -1065,10 +1065,10 @@ class CatalogueUpdater:
             # Merge datasets from all rows
             all_datasets = set()
             for r in rows_list:
-                datasets = r.get("dataset(s) d'appartenance", [])
+                datasets = r.get("datasets", [])
                 if datasets:
                     all_datasets.update(datasets)
-            merged["dataset(s) d'appartenance"] = list(all_datasets)
+            merged["datasets"] = list(all_datasets)
 
             # Merge meteo: take first non-null
             for meteo_col in ["Hs WW3", "Tp WW3", "U10 ecmwf", "v10 ecmwf"]:
@@ -1115,24 +1115,24 @@ class CatalogueUpdater:
 
             presence_ocn_val = None
             for r in rows_list:
-                val = r.get("presence OCN")
+                val = r.get("PATH OCN")
                 if val is not None:
                     presence_ocn_val = val
                     break
-            merged["presence OCN"] = presence_ocn_val
+            merged["PATH OCN"] = presence_ocn_val
 
-            # Merge dataset_category: take highest priority
+            # Merge category: take highest priority
             all_cats = []
             for r in rows_list:
-                cat = self._extract_category_value(r.get("dataset_category"))
+                cat = self._extract_category_value(r.get("category"))
                 if cat:
                     all_cats.append(cat)
             
             if all_cats:
                 best_cat = max(all_cats, key=self._get_category_priority)
-                merged["dataset_category"] = best_cat
+                merged["category"] = best_cat
             else:
-                merged["dataset_category"] = None
+                merged["category"] = None
 
             merged_rows.append(merged)
 
@@ -1553,14 +1553,14 @@ class CatalogueUpdater:
             ocn_rows = df.filter(pl.col("SAFE OCN").is_not_null())  # <-- ADDED
         else:
             slc_rows = df.filter(
-                pl.col("SAFE SLC").is_not_null() & pl.col("presence SLC").is_null()
+                pl.col("SAFE SLC").is_not_null() & pl.col("PATH SLC").is_null()
             )
             grd_rows = df.filter(
-                pl.col("SAFE GRD").is_not_null() & pl.col("presence GRD").is_null()
+                pl.col("SAFE GRD").is_not_null() & pl.col("PATH GRD").is_null()
             )
 
             ocn_rows = df.filter(  # <-- ADDED
-                pl.col("SAFE OCN").is_not_null() & pl.col("presence OCN").is_null()
+                pl.col("SAFE OCN").is_not_null() & pl.col("PATH OCN").is_null()
             )
         
         logger.info(f"Checking presence for {slc_rows.height} SLC, {grd_rows.height} GRD, and {ocn_rows.height} OCN products.")
@@ -1608,7 +1608,7 @@ class CatalogueUpdater:
         df = df.with_columns(
             pl.when(
                 pl.col("SAFE SLC").is_not_null()
-                & (pl.col("presence SLC").is_null() | pl.lit(force))
+                & (pl.col("PATH SLC").is_null() | pl.lit(force))
             )
             .then(
                 pl.struct(["SAFE SLC"]).map_elements(
@@ -1618,15 +1618,15 @@ class CatalogueUpdater:
                     return_dtype=pl.Utf8,
                 )
             )
-            .otherwise(pl.col("presence SLC"))
-            .alias("presence SLC")
+            .otherwise(pl.col("PATH SLC"))
+            .alias("PATH SLC")
         )
 
         # Update GRD presence column
         df = df.with_columns(
             pl.when(
                 pl.col("SAFE GRD").is_not_null()
-                & (pl.col("presence GRD").is_null() | pl.lit(force))
+                & (pl.col("PATH GRD").is_null() | pl.lit(force))
             )
             .then(
                 pl.struct(["SAFE GRD"]).map_elements(
@@ -1636,15 +1636,15 @@ class CatalogueUpdater:
                     return_dtype=pl.Utf8,
                 )
             )
-            .otherwise(pl.col("presence GRD"))
-            .alias("presence GRD")
+            .otherwise(pl.col("PATH GRD"))
+            .alias("PATH GRD")
         )
         
         # Update OCN presence column  # <-- ADDED
         df = df.with_columns(
             pl.when(
                 pl.col("SAFE OCN").is_not_null() & 
-                (pl.col("presence OCN").is_null() | pl.lit(force))
+                (pl.col("PATH OCN").is_null() | pl.lit(force))
             )
             .then(
                 pl.struct(["SAFE OCN"])
@@ -1653,14 +1653,14 @@ class CatalogueUpdater:
                     return_dtype=pl.Utf8
                 )
             )
-            .otherwise(pl.col("presence OCN"))
-            .alias("presence OCN")
+            .otherwise(pl.col("PATH OCN"))
+            .alias("PATH OCN")
         )
         
         # Count how many were found
-        found_slc = df.filter(pl.col("SAFE SLC").is_not_null() & pl.col("presence SLC").is_not_null()).height
-        found_grd = df.filter(pl.col("SAFE GRD").is_not_null() & pl.col("presence GRD").is_not_null()).height
-        found_ocn = df.filter(pl.col("SAFE OCN").is_not_null() & pl.col("presence OCN").is_not_null()).height  # <-- ADDED
+        found_slc = df.filter(pl.col("SAFE SLC").is_not_null() & pl.col("PATH SLC").is_not_null()).height
+        found_grd = df.filter(pl.col("SAFE GRD").is_not_null() & pl.col("PATH GRD").is_not_null()).height
+        found_ocn = df.filter(pl.col("SAFE OCN").is_not_null() & pl.col("PATH OCN").is_not_null()).height  # <-- ADDED
         
         total_slc = df.filter(pl.col("SAFE SLC").is_not_null()).height
         total_grd = df.filter(pl.col("SAFE GRD").is_not_null()).height
@@ -1719,10 +1719,10 @@ class CatalogueUpdater:
         # Build list of columns to check
         derived_cols = []
         for v in l1b_versions:
-            derived_cols.append(f"presence L1B XSP {v}")
+            derived_cols.append(f"PATH L1B XSP {v}")
         for v in l1c_versions:
-            derived_cols.append(f"presence L1C XSP {v}")
-        derived_cols.extend(["presence L2 WAV E11", "presence L2 WAV E13"])
+            derived_cols.append(f"PATH L1C XSP {v}")
+        derived_cols.extend(["PATH L2 WAV E11", "PATH L2 WAV E13"])
 
         # Only process SLCs that are missing at least one derived product
         # Build condition: any derived column is NULL
@@ -1776,11 +1776,11 @@ class CatalogueUpdater:
         # Map s1ifr column names to catalogue column names
         col_mapping = {}
         for v in l1b_versions:
-            col_mapping[f"L1B_XSP_{v}"] = f"presence L1B XSP {v}"
+            col_mapping[f"L1B_XSP_{v}"] = f"PATH L1B XSP {v}"
         for v in l1c_versions:
-            col_mapping[f"L1C_XSP_{v}"] = f"presence L1C XSP {v}"
-        col_mapping["L2_WAV_E11"] = "presence L2 WAV E11"
-        col_mapping["L2_WAV_E13"] = "presence L2 WAV E13"
+            col_mapping[f"L1C_XSP_{v}"] = f"PATH L1C XSP {v}"
+        col_mapping["L2_WAV_E11"] = "PATH L2 WAV E11"
+        col_mapping["L2_WAV_E13"] = "PATH L2 WAV E13"
 
         # Update the DataFrame for each derived product column
         for src_col, dst_col in col_mapping.items():
@@ -1820,10 +1820,10 @@ class CatalogueUpdater:
         logger.info("Linking OCN to GRD products...")
         
         # Find GRD rows without OCN
+        # Filtre : exclure les lignes où SAFE OCN == "NOT_FOUND"
         grd_without_ocn = df.filter(
             pl.col("SAFE GRD").is_not_null() &
-            pl.col("SAFE OCN").is_null() &
-            (pl.col("presence OCN").is_null() | (pl.col("presence OCN") != "NOT_FOUND"))
+            (pl.col("SAFE OCN").is_null() | (pl.col("SAFE OCN") != "NOT_FOUND"))
         )
         
         if grd_without_ocn.height == 0:
@@ -1838,24 +1838,23 @@ class CatalogueUpdater:
             grd_polygon = row.get("polygon GRD")
             
             try:
-                # Use CDSE to find OCN for this GRD
                 ocn_name = self._call_cdse_get_ocn_from_grd(grd_name, grd_polygon)
                 if ocn_name:
                     updates[grd_name] = ocn_name
                     logger.debug(f"CDSE found OCN for GRD {grd_name} -> {ocn_name}")
                 else:
-                    # Mark as not found
+                    # Marquer comme "NOT_FOUND" dans SAFE OCN
                     df = df.with_columns(
                         pl.when(pl.col("SAFE GRD") == grd_name)
                         .then(pl.lit("NOT_FOUND"))
-                        .otherwise(pl.col("presence OCN"))
-                        .alias("presence OCN")
+                        .otherwise(pl.col("SAFE OCN"))
+                        .alias("SAFE OCN")
                     )
                     logger.warning(f"CDSE could not find OCN for GRD {grd_name}")
             except Exception as e:
                 logger.error(f"Error linking OCN for GRD {grd_name}: {e}")
         
-        # Apply updates
+        # Apply updates (quand un OCN est trouvé)
         for grd_name, ocn_name in updates.items():
             df = df.with_columns(
                 pl.when(pl.col("SAFE GRD") == grd_name)
@@ -1873,12 +1872,11 @@ class CatalogueUpdater:
         """
         logger.info("Fallback: Linking OCN to SLC products...")
         
-        # Find SLC rows without OCN
+        # Find SLC rows without OCN (exclure "NOT_FOUND")
         slc_without_ocn = df.filter(
             pl.col("SAFE SLC").is_not_null() &
-            pl.col("SAFE GRD").is_null() &          # <-- Only SLC-only rows
-            pl.col("SAFE OCN").is_null() &
-            (pl.col("presence OCN").is_null() | (pl.col("presence OCN") != "NOT_FOUND"))
+            pl.col("SAFE GRD").is_null() &
+            (pl.col("SAFE OCN").is_null() | (pl.col("SAFE OCN") != "NOT_FOUND"))
         )
         
         if slc_without_ocn.height == 0:
@@ -1888,11 +1886,11 @@ class CatalogueUpdater:
         logger.info(f"Attempting to link OCN for {slc_without_ocn.height} SLC products...")
         
         # Get list of SLCs that already have OCN via GRD
-        # Use a different approach: collect the data first
         linked_via_grd_names = set()
         for row in df.filter(
             pl.col("SAFE GRD").is_not_null() & 
-            pl.col("SAFE OCN").is_not_null()
+            pl.col("SAFE OCN").is_not_null() &
+            (pl.col("SAFE OCN") != "NOT_FOUND")
         ).to_dicts():
             linked_via_grd_names.add(row.get("SAFE SLC"))
         
@@ -1912,6 +1910,13 @@ class CatalogueUpdater:
                     updates[slc_name] = ocn_name
                     logger.debug(f"CDSE found OCN for SLC {slc_name} -> {ocn_name}")
                 else:
+                    # Marquer comme "NOT_FOUND" dans SAFE OCN
+                    df = df.with_columns(
+                        pl.when(pl.col("SAFE SLC") == slc_name)
+                        .then(pl.lit("NOT_FOUND"))
+                        .otherwise(pl.col("SAFE OCN"))
+                        .alias("SAFE OCN")
+                    )
                     logger.warning(f"CDSE could not find OCN for SLC {slc_name}")
             except Exception as e:
                 logger.error(f"Error linking OCN for SLC {slc_name}: {e}")
@@ -2070,7 +2075,7 @@ class CatalogueUpdater:
                 return "undefined"
             return max(cats, key=_category_priority)
 
-        # Flatten dataset_category before grouping
+        # Flatten category before grouping
         # Use map_elements to safely flatten any list columns
         def _flatten_category(x):
             if isinstance(x, list):
@@ -2088,9 +2093,9 @@ class CatalogueUpdater:
             return x if isinstance(x, str) else None
 
         combined = combined.with_columns(
-            pl.col("dataset_category")
+            pl.col("category")
             .map_elements(_flatten_category, return_dtype=pl.Utf8)
-            .alias("dataset_category")
+            .alias("category")
         )
 
         # Group and aggregate
@@ -2099,17 +2104,17 @@ class CatalogueUpdater:
             pl.col("SAFE GRD").first().alias("SAFE GRD"),
             pl.col("SAFE OCN").first().alias("SAFE OCN"),
             # Use list.explode() instead of deprecated flatten()
-            pl.col("dataset(s) d'appartenance")
+            pl.col("datasets")
             .list.explode()
             .unique()
-            .alias("dataset(s) d'appartenance"),
+            .alias("datasets"),
             # Collect categories for each group
-            pl.col("dataset_category").alias("_categories"),
-            pl.col("presence SLC").first().alias("presence SLC"),
-            pl.col("presence GRD").first().alias("presence GRD"),
-            pl.col("presence OCN").first().alias("presence OCN"),
-            pl.col("presence L1B XSP A21").first().alias("presence L1B XSP A21"),
-            pl.col("presence L1C XSP B17").first().alias("presence L1C XSP B17"),
+            pl.col("category").alias("_categories"),
+            pl.col("PATH SLC").first().alias("PATH SLC"),
+            pl.col("PATH GRD").first().alias("PATH GRD"),
+            pl.col("PATH OCN").first().alias("PATH OCN"),
+            pl.col("PATH L1B XSP A21").first().alias("PATH L1B XSP A21"),
+            pl.col("PATH L1C XSP B17").first().alias("PATH L1C XSP B17"),
             pl.col("Hs WW3").first().alias("Hs WW3"),
             pl.col("Tp WW3").first().alias("Tp WW3"),
             pl.col("U10 ecmwf").first().alias("U10 ecmwf"),
@@ -2121,7 +2126,7 @@ class CatalogueUpdater:
             pl.col("S3path SLC").first().alias("S3path SLC"),
             pl.col("S3path GRD").first().alias("S3path GRD"),
             pl.col("polarization").first().alias("polarization"),
-            pl.col("unité").first().alias("unité"),
+            pl.col("unit").first().alias("unit"),
         ])
 
         # Apply the best category function to the _categories column
@@ -2131,7 +2136,7 @@ class CatalogueUpdater:
                 lambda x: _best_category(x["_categories"]),
                 return_dtype=pl.Utf8
             )
-            .alias("dataset_category")
+            .alias("category")
         )
 
         # Drop temporary columns

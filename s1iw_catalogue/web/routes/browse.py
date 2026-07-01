@@ -36,14 +36,14 @@ def apply_filters(df: pl.DataFrame, filter_req: FilterRequest) -> pl.DataFrame:
         
         # Dataset filter - check if any selected dataset is in the list
         if filter_req.datasets and len(filter_req.datasets) > 0:
-            if "dataset(s) d'appartenance" in df.columns:
+            if "datasets" in df.columns:
                 # Use list.contains with any() to check overlap
                 # Create a condition: for any dataset in the list, check if it's in the array
                 # Polars: list.contains(element) returns a boolean expression
                 # We need to check if ANY of the selected datasets are in the list
                 condition = pl.lit(False)
                 for dataset in filter_req.datasets:
-                    condition = condition | pl.col("dataset(s) d'appartenance").list.contains(dataset)
+                    condition = condition | pl.col("datasets").list.contains(dataset)
                 df = df.filter(condition)
         
         # Polarization filter
@@ -53,8 +53,8 @@ def apply_filters(df: pl.DataFrame, filter_req: FilterRequest) -> pl.DataFrame:
         
         # Satellite filter
         if filter_req.satellites and len(filter_req.satellites) > 0:
-            if "unité" in df.columns:
-                df = df.filter(pl.col("unité").is_in(filter_req.satellites))
+            if "unit" in df.columns:
+                df = df.filter(pl.col("unit").is_in(filter_req.satellites))
         
         # Date range filters
         if filter_req.date_start:
@@ -67,25 +67,25 @@ def apply_filters(df: pl.DataFrame, filter_req: FilterRequest) -> pl.DataFrame:
         
         # Presence filters
         if filter_req.has_slc is True:
-            if "presence SLC" in df.columns:
-                df = df.filter(pl.col("presence SLC").is_not_null())
+            if "PATH SLC" in df.columns:
+                df = df.filter(pl.col("PATH SLC").is_not_null())
         elif filter_req.has_slc is False:
-            if "presence SLC" in df.columns:
-                df = df.filter(pl.col("presence SLC").is_null())
+            if "PATH SLC" in df.columns:
+                df = df.filter(pl.col("PATH SLC").is_null())
         
         if filter_req.has_grd is True:
-            if "presence GRD" in df.columns:
-                df = df.filter(pl.col("presence GRD").is_not_null())
+            if "PATH GRD" in df.columns:
+                df = df.filter(pl.col("PATH GRD").is_not_null())
         elif filter_req.has_grd is False:
-            if "presence GRD" in df.columns:
-                df = df.filter(pl.col("presence GRD").is_null())
+            if "PATH GRD" in df.columns:
+                df = df.filter(pl.col("PATH GRD").is_null())
         
         if filter_req.has_ocn is True:
-            if "presence OCN" in df.columns:
-                df = df.filter(pl.col("presence OCN").is_not_null())
+            if "PATH OCN" in df.columns:
+                df = df.filter(pl.col("PATH OCN").is_not_null())
         elif filter_req.has_ocn is False:
-            if "presence OCN" in df.columns:
-                df = df.filter(pl.col("presence OCN").is_null())
+            if "PATH OCN" in df.columns:
+                df = df.filter(pl.col("PATH OCN").is_null())
         
         return df
     except Exception as e:
@@ -118,8 +118,8 @@ async def filter_catalogue(request: FilterRequest) -> Dict[str, Any]:
         df = apply_filters(catalogue_manager.df, request)
         
         # Select columns to return
-        columns = ["SAFE SLC", "SAFE GRD", "SAFE OCN", "dataset(s) d'appartenance",
-                   "start date SAFE", "horodating", "polarization", "unité"]
+        columns = ["SAFE SLC", "SAFE GRD", "SAFE OCN", "datasets",
+                   "start date SAFE", "horodating", "polarization", "unit"]
         columns = [c for c in columns if c in df.columns]
         
         result_df = df.select(columns).slice(request.offset, request.limit)
@@ -187,9 +187,9 @@ async def get_map_data(request: MapRequest) -> Dict[str, Any]:
                     "safe_slc": row.get("SAFE SLC"),
                     "safe_grd": row.get("SAFE GRD"),
                     "safe_ocn": row.get("SAFE OCN"),
-                    "dataset": row.get("dataset(s) d'appartenance"),
+                    "dataset": row.get("datasets"),
                     "polarization": row.get("polarization"),
-                    "satellite": row.get("unité"),
+                    "satellite": row.get("unit"),
                     "start_date": str(row.get("start date SAFE")) if row.get("start date SAFE") else None,
                     "horodating": str(row.get("horodating")) if row.get("horodating") else None,
                 }

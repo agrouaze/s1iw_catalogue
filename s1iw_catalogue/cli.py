@@ -107,7 +107,7 @@ def stats(
     df = pl.read_parquet(catalogue)
 
     if dataset:
-        df = df.filter(pl.col("dataset(s) d'appartenance").list.contains(dataset))
+        df = df.filter(pl.col("datasets").list.contains(dataset))
         if df.height == 0:
             click.echo(f"No products found for dataset '{dataset}'")
             return
@@ -129,9 +129,9 @@ def stats(
             sample_cols = [
                 "SAFE SLC",
                 "SAFE GRD",
-                "dataset(s) d'appartenance",
+                "datasets",
                 "polarization",
-                "unité",
+                "unit",
             ]
             sample_cols = [c for c in sample_cols if c in df.columns]
             click.echo(df.select(sample_cols).head(5))

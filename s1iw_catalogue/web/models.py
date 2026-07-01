@@ -13,7 +13,7 @@ class FilterRequest(BaseModel):
     ocn_name: Optional[str] = Field(None, description="Partial match on SAFE OCN name")
     datasets: Optional[List[str]] = Field(None, description="Filter by dataset names")
     polarization: Optional[List[str]] = Field(None, description="Filter by polarization")
-    satellites: Optional[List[str]] = Field(None, description="Filter by satellite (unité)")
+    satellites: Optional[List[str]] = Field(None, description="Filter by satellite (unit)")
     date_start: Optional[datetime] = Field(None, description="Start of acquisition date range")
     date_end: Optional[datetime] = Field(None, description="End of acquisition date range")
     has_slc: Optional[bool] = Field(None, description="Only products with SLC presence")

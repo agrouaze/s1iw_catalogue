@@ -61,25 +61,25 @@ async def get_dataset_completeness() -> Dict[str, Any]:
     df = catalogue_manager.df
     
     presence_cols = [
-        "presence SLC",
-        "presence GRD",
-        "presence OCN",
-        "presence L1B XSP A21",
-        "presence L1C XSP B17",
+        "PATH SLC",
+        "PATH GRD",
+        "PATH OCN",
+        "PATH L1B XSP A21",
+        "PATH L1C XSP B17",
     ]
     
     # Get all datasets
-    if "dataset(s) d'appartenance" not in df.columns:
+    if "datasets" not in df.columns:
         return {"datasets": {}, "overall": {}}
     
     datasets = df.select(
-        pl.col("dataset(s) d'appartenance").explode().unique()
+        pl.col("datasets").explode().unique()
     ).to_series().to_list()
     
     results = {}
     for dataset in datasets:
         dataset_df = df.filter(
-            pl.col("dataset(s) d'appartenance").list.contains(dataset)
+            pl.col("datasets").list.contains(dataset)
         )
         total = dataset_df.height
         
@@ -91,7 +91,7 @@ async def get_dataset_completeness() -> Dict[str, Any]:
                 dataset_results[col] = round(pct, 1)
         
         # Calculate overall average
-        presence_values = [v for k, v in dataset_results.items() if k != "presence OCN"]
+        presence_values = [v for k, v in dataset_results.items() if k != "PATH OCN"]
         if presence_values:
             dataset_results["overall"] = round(sum(presence_values) / len(presence_values), 1)
         else:
@@ -108,7 +108,7 @@ async def get_dataset_completeness() -> Dict[str, Any]:
             pct = (present / total * 100) if total > 0 else 0.0
             overall_results[col] = round(pct, 1)
     
-    presence_values = [v for k, v in overall_results.items() if k != "presence OCN"]
+    presence_values = [v for k, v in overall_results.items() if k != "PATH OCN"]
     if presence_values:
         overall_results["overall"] = round(sum(presence_values) / len(presence_values), 1)
     else:
@@ -129,11 +129,11 @@ async def get_presence_stats() -> Dict[str, float]:
     df = catalogue_manager.df
     
     presence_cols = [
-        "presence SLC",
-        "presence GRD",
-        "presence OCN",
-        "presence L1B XSP A21",
-        "presence L1C XSP B17",
+        "PATH SLC",
+        "PATH GRD",
+        "PATH OCN",
+        "PATH L1B XSP A21",
+        "PATH L1C XSP B17",
     ]
     
     result = {}

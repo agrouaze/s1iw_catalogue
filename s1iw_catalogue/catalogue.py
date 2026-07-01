@@ -98,7 +98,7 @@ class S1IWCatalogue:
 
         Behavior:
         - Existing rows: preserve all columns except:
-          - dataset(s) d'appartenance: merge new dataset names
+          - datasets: merge new dataset names
           - horodating: update if row changed
           - presence columns: fill if empty (not overwrite)
           - polygon/S3path: fill if empty (not overwrite)
@@ -159,7 +159,7 @@ class S1IWCatalogue:
             )
 
             merged = existing_df.join(
-                merge_df.select(["_join_key", "dataset(s) d'appartenance"]),
+                merge_df.select(["_join_key", "datasets"]),
                 on="_join_key",
                 how="left",
                 suffix="_new",
@@ -167,19 +167,19 @@ class S1IWCatalogue:
 
             merged = merged.with_columns(
                 pl.concat_list(
-                    pl.col("dataset(s) d'appartenance"),
-                    pl.col("dataset(s) d'appartenance_new"),
+                    pl.col("datasets"),
+                    pl.col("datasets_new"),
                 )
                 .list.unique()
-                .alias("dataset(s) d'appartenance")
+                .alias("datasets")
             )
             merged = merged.with_columns(
-                pl.when(pl.col("dataset(s) d'appartenance_new").list.len() > 0)
+                pl.when(pl.col("datasets_new").list.len() > 0)
                 .then(pl.lit(datetime.datetime.now()))
                 .otherwise(pl.col("horodating"))
                 .alias("horodating")
             )
-            merged = merged.drop(["_join_key", "dataset(s) d'appartenance_new"])
+            merged = merged.drop(["_join_key", "datasets_new"])
 
             merged = self._updater.core_upate(merged)
             existing_df = merged
@@ -215,7 +215,7 @@ class S1IWCatalogue:
     def stats(self, dataset: str | None = None, verbose: bool = False, output: str | Path | None = None) -> dict[str, Any]:
         df = self._load_catalogue()
         if dataset:
-            df = df.filter(pl.col("dataset(s) d'appartenance").list.contains(dataset))
+            df = df.filter(pl.col("datasets").list.contains(dataset))
             if df.height == 0:
                 logger.warning(f"No products found for dataset '{dataset}'")
                 return {}

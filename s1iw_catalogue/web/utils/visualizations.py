@@ -14,11 +14,11 @@ def create_presence_bar_chart(df: pl.DataFrame) -> Dict[str, Any]:
     Returns Plotly figure as JSON.
     """
     presence_cols = [
-        "presence SLC",
-        "presence GRD",
-        "presence OCN",
-        "presence L1B XSP A21",
-        "presence L1C XSP B17",
+        "PATH SLC",
+        "PATH GRD",
+        "PATH OCN",
+        "PATH L1B XSP A21",
+        "PATH L1C XSP B17",
     ]
     
     labels = []
@@ -75,21 +75,21 @@ def create_dataset_completeness_table(
     
     for dataset, metrics in sorted(datasets_data.items()):
         row = [dataset]
-        row.append(f"{metrics.get('presence SLC', 0):.1f}%")
-        row.append(f"{metrics.get('presence GRD', 0):.1f}%")
-        row.append(f"{metrics.get('presence OCN', 0):.1f}%")
-        row.append(f"{metrics.get('presence L1B XSP A21', 0):.1f}%")
-        row.append(f"{metrics.get('presence L1C XSP B17', 0):.1f}%")
+        row.append(f"{metrics.get('PATH SLC', 0):.1f}%")
+        row.append(f"{metrics.get('PATH GRD', 0):.1f}%")
+        row.append(f"{metrics.get('PATH OCN', 0):.1f}%")
+        row.append(f"{metrics.get('PATH L1B XSP A21', 0):.1f}%")
+        row.append(f"{metrics.get('PATH L1C XSP B17', 0):.1f}%")
         row.append(f"{metrics.get('overall', 0):.1f}%")
         rows.append(row)
     
     # Add overall row
     overall_row = ["**Overall**"]
-    overall_row.append(f"{overall.get('presence SLC', 0):.1f}%")
-    overall_row.append(f"{overall.get('presence GRD', 0):.1f}%")
-    overall_row.append(f"{overall.get('presence OCN', 0):.1f}%")
-    overall_row.append(f"{overall.get('presence L1B XSP A21', 0):.1f}%")
-    overall_row.append(f"{overall.get('presence L1C XSP B17', 0):.1f}%")
+    overall_row.append(f"{overall.get('PATH SLC', 0):.1f}%")
+    overall_row.append(f"{overall.get('PATH GRD', 0):.1f}%")
+    overall_row.append(f"{overall.get('PATH OCN', 0):.1f}%")
+    overall_row.append(f"{overall.get('PATH L1B XSP A21', 0):.1f}%")
+    overall_row.append(f"{overall.get('PATH L1C XSP B17', 0):.1f}%")
     overall_row.append(f"{overall.get('overall', 0):.1f}%")
     rows.append(overall_row)
     
