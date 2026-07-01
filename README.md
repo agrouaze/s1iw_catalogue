@@ -15,7 +15,7 @@
 
 **s1iw_catalogue** – Exhaustive catalogue of Sentinel‑1 IW SAFE products for Ifremer.
 
-Build a single Parquet file with availability, dataset membership, meteorological enrichment, and acquisition geometry. Enables fast dashboards, product lookup, and spatial heatmaps.
+Build a single Parquet file with availability, dataset membership, category, meteorological enrichment, and acquisition geometry. Enables fast dashboards, product lookup, spatial heatmaps, and catalogue merging.
 
 </div>
 
@@ -24,7 +24,8 @@ Build a single Parquet file with availability, dataset membership, meteorologica
 This tool creates and maintains a master Parquet file (`sentinel-1_exhaustive_IW_SAFE_working_material.parquet`) that answers:
 
 - Which SAFE products (SLC, GRD, OCN) are available on Ifremer storage?
-- Do they belong to internal datasets (`sarwave`, `scat`, etc.)?
+- Do they belong to internal datasets (`ciaran2023`, `jolina26`, etc.)?
+- What is their dataset category (`train`, `val`, `test`, `case-study`)?
 - Are they colocalised with reference listings?
 - What are the associated wave (WW3) and wind (ECMWF) parameters?
 - What is the acquisition start date, geometry, orbit, and polarisation?
@@ -34,6 +35,133 @@ The file is updated **daily** via a workflow that uses:
 - `s1ifr` to check local presence at Ifremer
 - `familyprod` to derive A21, B17, OCN and dataset membership
 - Optional ECMWF/WW3 enrichment
+
+## Features
+
+### Core functionalities
+
+- **Create** – Build a catalogue from listing files with dataset metadata.
+- **Update** – Incrementally update an existing catalogue with new listings.
+- **Merge** – Combine multiple catalogues into one (parallel processing on HPC).
+- **Stats** – Generate statistics and completeness reports.
+- **Serve** – Launch a web interface for visual exploration (FastAPI + Plotly).
+- **Query** – Look up SAFE products by name.
+- **Backup** – Create timestamped backups of the catalogue.
+- **Dataset categories** – Assign `undefined`, `train`, `val`, `test`, `case-study` with priority hierarchy.
+- **Conflict reporting** – Track dataset category conflicts in a separate file.
+
+### Column schema (key columns)
+
+| Column | Description |
+|--------|-------------|
+| `SAFE SLC` | SAFE name for SLC product |
+| `SAFE GRD` | SAFE name for GRD product |
+| `SAFE OCN` | SAFE name for OCN product (or `"NOT_FOUND"`) |
+| `PATH SLC` | Full path to SLC on Ifremer storage |
+| `PATH GRD` | Full path to GRD on Ifremer storage |
+| `PATH OCN` | Full path to OCN on Ifremer storage |
+| `PATH L1B XSP A21` | Full path to L1B XSP A21 product |
+| `PATH L1C XSP B17` | Full path to L1C XSP B17 product |
+| `datasets` | List of dataset names (e.g., `["ciaran2023"]`) |
+| `category` | Dataset category: `undefined`, `train`, `val`, `test`, `case-study` |
+| `unit` | Satellite identifier: `S1A`, `S1B`, `S1C`, `S1D` |
+| `start date SAFE` | Acquisition start date |
+| `horodating` | Last catalogue update timestamp |
+| `polygon SLC` / `polygon GRD` | Footprint polygon (WKT) |
+| `S3path SLC` / `S3path GRD` | S3 path on CDSE |
+
+## Configuration
+
+The tool uses a YAML configuration file. Example:
+
+```
+paths:
+  reference_listings:
+    ciaran2023:
+      path: "/path/to/listing.txt"
+      type: "slc"
+      description: "Storm Ciaran over Europe"
+      category: "case-study"
+    jolina26:
+      path: "/path/to/grd_listing.txt"
+      type: "grd"
+      description: "Medicane Jolina"
+      category: "case-study"
+  output:
+    catalogue: "/path/to/catalogue.parquet"
+s1ifr-config-file: "/path/to/s1ifr/config.yml"
+cdse_cache_dir: "/path/to/cache"
+product_versions:
+  l1b: ["A21", "A23"]
+  l1c: ["B17", "B21"]
+```
+
+## Command-Line Interface
+
+### Create a catalogue
+
+```
+catalog-iw --config config.yml create --output catalogue.parquet
+```
+
+Create a catalogue for a single listing (useful for parallel HPC processing):
+
+```
+catalog-iw --config config.yml create --output cat_ciaran.parquet --listing ciaran2023
+```
+
+### Update an existing catalogue
+
+```
+catalog-iw --config config.yml update --catalogue catalogue.parquet
+```
+
+### Merge multiple catalogues
+
+```
+catalog-iw --config config.yml merge cat1.parquet cat2.parquet --output merged.parquet
+```
+
+### Generate statistics
+
+```
+catalog-iw --config config.yml stats --catalogue catalogue.parquet
+```
+
+Filter by dataset:
+
+```
+catalog-iw --config config.yml stats --catalogue catalogue.parquet --dataset ciaran2023
+```
+
+Export to JSON:
+
+```
+catalog-iw --config config.yml stats --catalogue catalogue.parquet --output stats.json
+```
+
+### Launch web interface
+
+```
+catalog-iw --config config.yml serve --catalogue catalogue.parquet
+```
+
+Options:
+- `--host` (default: `127.0.0.1`)
+- `--port` (default: `8649`)
+- `--reload` (development mode)
+
+### Backup the catalogue
+
+```
+catalog-iw --config config.yml backup --catalogue catalogue.parquet
+```
+
+### Query a SAFE product
+
+```
+catalog-iw --config config.yml query --catalogue catalogue.parquet --safe-name S1A_IW_SLC_...
+```
 
 ## Very first steps
 
@@ -104,60 +232,34 @@ pip install s1iw_catalogue
 
 **Note**: The package requires Python 3.11 or higher. It depends on `s1ifr` which is fetched from Ifremer's private PyPI index (configured automatically in `pyproject.toml`).
 
-## Usage
+## Python API Usage
 
 ### Build the exhaustive Parquet catalogue
 
 ```
-from s1iw_catalogue.builder import build_catalogue
+from s1iw_catalogue.catalogue import S1IWCatalogue
 
-# Build with default settings (uses reference listings from config/)
-build_catalogue(output_path="sentinel-1_exhaustive_IW_SAFE_working_material.parquet")
+cat = S1IWCatalogue("catalogue.parquet", config="config.yml")
+cat.create()
 ```
 
 ### Query the catalogue
 
 ```
-import pandas as pd
+import polars as pl
 
-df = pd.read_parquet("sentinel-1_exhaustive_IW_SAFE_working_material.parquet")
+df = pl.read_parquet("catalogue.parquet")
 
 # Find a specific SAFE
-safe_row = df[df["SAFE SLC"] == "S1A_IW_SLC__1SDV_20250101T123456_20250101T123523_012345_012345_0123"]
+safe_row = df.filter(pl.col("SAFE SLC") == "S1A_IW_SLC__...")
 
-# Get all SAFE belonging to 'sarwave' dataset
-sarwave_safes = df[df["dataset(s) d'appartenance"].apply(lambda x: "sarwave" in x)]
+# Get all SAFE belonging to a dataset
+dataset_safes = df.filter(pl.col("datasets").list.contains("ciaran2023"))
+
+# Get statistics
+stats = cat.stats()
+print(stats["total_count"])
 ```
-
-### Command-line interface (planned)
-
-```
-s1iw-catalogue build --ref-listings ./listings --output ./catalogue.parquet
-s1iw-catalogue query --safe-name S1A_IW_GRD...
-s1iw-catalogue heatmap --dataset sarwave --variable Hs --output map.png
-```
-
-## Features
-
-### Core functionalities
-
-- **Daily incremental update** of the Parquet catalogue.
-- **SAFE deduplication** – merges information from multiple sources.
-- **Presence tracking** for SLC, GRD, OCN, A21, B17 (local paths or NULL).
-- **Dataset membership** as an array of strings.
-- **Colocalisation** with any reference listing.
-- **Enrichment** with WW3 (Hs, Tp) and ECMWF (U10, V10) – optional.
-- **Geometry** – acquisition polygon (WKT) and start date.
-
-### Development features
-
-- Supports **Python 3.11+**.
-- **No Poetry** – uses `pip` + `hatchling` for building.
-- Codestyle with `black`, `isort`, `pyupgrade`.
-- Pre-commit hooks.
-- Type checks with `mypy`, docstring checks with `darglint`.
-- Security checks with `safety` and `bandit`.
-- Testing with `pytest` and coverage reporting.
 
 ## Makefile usage
 
@@ -258,7 +360,7 @@ make cleanup            # removes pycache, .DS_Store, .mypy_cache, .pytest_cache
 
 ## Releases
 
-We follow [Semantic Versions](https://semver.org/).
+We follow [Semantic Versions](https://semver.org/).  
 See [GitHub Releases](https://github.com/agrouaze/s1iw_catalogue/releases) for changelog.
 
 ## License
