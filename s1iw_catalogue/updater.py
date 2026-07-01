@@ -644,6 +644,11 @@ class CatalogueUpdater:
 
         if checkpoint_dir is None:
             checkpoint_dir = self._get_checkpoint_dir()
+            if checkpoint_dir is None:
+                # If checkpoint dir creation fails, use a temp directory
+                import tempfile
+                checkpoint_dir = Path(tempfile.mkdtemp())
+                logger.warning(f"Using temporary checkpoint directory: {checkpoint_dir}")
 
         if output_file is None:
             # Deterministic filename based on sorted IDs and target type
@@ -651,7 +656,7 @@ class CatalogueUpdater:
             hash_obj = hashlib.md5(''.join(sorted_ids).encode())
             hash_hex = hash_obj.hexdigest()[:8]
             output_file = f"batch_{target_type}_{hash_hex}.txt"
-            # Place it in the checkpoint directory (or temp)
+            # Place it in the checkpoint directory
             output_file = str(Path(checkpoint_dir) / output_file) if checkpoint_dir else output_file
 
         results = entrypoint(
@@ -668,8 +673,11 @@ class CatalogueUpdater:
                 mapping[r["source_id"]] = r["target_name"]
 
         # Optionally remove the output file if you don't need it
-        if output_file and Path(output_file).exists():
-            Path(output_file).unlink()
+        if cleanup_on_success and output_file and Path(output_file).exists():
+            try:
+                Path(output_file).unlink()
+            except:
+                pass
 
         return mapping
 
@@ -1446,7 +1454,7 @@ class CatalogueUpdater:
             return df
 
         # Get cache directory from config if available
-        cache_dir = self.config.get("cdse_cache_dir", None)
+        cache_dir = self._config.get("cdse_cache_dir", None)
         if cache_dir:
             cache_dir = Path(cache_dir)
             logger.info(f"Using CDSE cache directory: {cache_dir}")
@@ -1695,7 +1703,8 @@ class CatalogueUpdater:
 
     def _get_checkpoint_dir(self) -> Path | None:
         """Return a checkpoint directory path based on the catalogue output path."""
-        catalogue_path = self.config.get("paths", {}).get("output", {}).get("catalogue")
+        # Fix: use self._config instead of self.config
+        catalogue_path = self._config.get("paths", {}).get("output", {}).get("catalogue")
         if not catalogue_path:
             return None
         base_dir = Path(catalogue_path).parent
@@ -1720,7 +1729,7 @@ class CatalogueUpdater:
             return df
 
         # Get s1ifr config file path from the main config
-        s1ifr_config_path = self.config.get("s1ifr-config-file", None)
+        s1ifr_config_path = self._config.get("s1ifr-config-file", None)
         if s1ifr_config_path:
             logger.info(f"Using s1ifr config file: {s1ifr_config_path}")
 
@@ -1904,12 +1913,12 @@ class CatalogueUpdater:
             return df
 
         # Get s1ifr config file path from the main config
-        s1ifr_config_path = self.config.get("s1ifr-config-file", None)
+        s1ifr_config_path = self._config.get("s1ifr-config-file", None)
         if s1ifr_config_path:
             logger.info(f"Using s1ifr config file: {s1ifr_config_path}")
 
         # Get product versions from config or use defaults
-        product_versions = self.config.get("product_versions", {})
+        product_versions = self._config.get("product_versions", {})
         l1b_versions = product_versions.get("l1b", ["A21", "A23"])
         l1c_versions = product_versions.get("l1c", ["B17", "B21"])
         # L2WAV versions are handled by s1ifr defaults if not specified

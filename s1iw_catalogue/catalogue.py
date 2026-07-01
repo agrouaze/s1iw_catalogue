@@ -87,7 +87,7 @@ class S1IWCatalogue:
         out_path = Path(output_path) if output_path else self._catalogue_path
         reference_listings = self._config.get("paths", {}).get("reference_listings", {})
         df = self._updater.build_from_listings(reference_listings)
-        df = self._updater.core_upate(df)
+        df = self._updater.core_update(df)
         df = self._updater._compute_category_and_conflicts(df, reference_listings, out_path)
         self._write_parquet_with_metadata(df, out_path)
         logger.info(f"Catalogue created at {out_path}")
