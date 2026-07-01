@@ -50,7 +50,7 @@ class S1IWCatalogue:
         else:
             self._config = load_config() if config is None else config
 
-        self._updater = CatalogueUpdater(self._config)  # type: ignore[arg-type]
+        self._updater = CatalogueUpdater(config=self._config, config_path=self._config_path)  # type: ignore[arg-type]
 
     def _write_parquet_with_metadata(self, df: pl.DataFrame, path: Path) -> None:
         try:

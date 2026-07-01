@@ -10,10 +10,14 @@ import time
 from collections import defaultdict
 from pathlib import Path
 import hashlib
+from typing import Optional, List, Union, Dict, Any
 import polars as pl
+import pandas as pd
 import contextlib
+from s1iw_catalogue.ww3_extractor import add_ww3_to_catalogue
 from s1iw_catalogue.schema import SCHEMA
-
+from s1iw_catalogue.schema import WW3_COLUMNS
+from s1iw_catalogue.config import load_config
 # Set up module-level logger
 logger = logging.getLogger(__name__)
 
@@ -21,17 +25,36 @@ logger = logging.getLogger(__name__)
 class CatalogueUpdater:
     """Handles incremental updates of the catalogue."""
 
-    def __init__(self, config: dict[str, Any]) -> None:
-        self.config = config
-        # Configure logger if not already configured (optional)
-        if not logger.handlers:
-            handler = logging.StreamHandler()
-            formatter = logging.Formatter(
-                "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
-            )
-            handler.setFormatter(formatter)
-            logger.addHandler(handler)
-            logger.setLevel(logging.INFO)
+    def __init__(
+        self,
+        config: Union[str, Path, Dict[str, Any], None] = None,
+        config_path: Union[str, Path, None] = None,
+    ):
+        """
+        Initialize the updater with configuration.
+        
+        Args:
+            config: Configuration dictionary or path to config file
+            config_path: Path to configuration file (alternative to config)
+        """
+        # Resolve config path to absolute
+        if config_path:
+            self._config_path = Path(config_path).resolve()
+        elif isinstance(config, (str, Path)):
+            self._config_path = Path(config).resolve()
+        else:
+            self._config_path = None
+
+        # Load config
+        if isinstance(config, (str, Path)):
+            self._config = load_config(config_path=config)
+        elif isinstance(config, dict):
+            self._config = config
+        else:
+            self._config = load_config() if config is None else config
+        
+        # For backward compatibility
+        self.config_path = str(self._config_path) if self._config_path else None
 
     @staticmethod
     def parse_safe_name(safe_name: str) -> dict[str, Any]:
@@ -74,6 +97,179 @@ class CatalogueUpdater:
             "start_date": start_date,
             "end_date": end_date,
         }
+    
+
+        
+    def update_with_ww3(self, 
+                        catalogue_df,
+                        n_jobs: int = 6,
+                        force_update: bool = False,
+                        verbose: bool = True) -> Union[pd.DataFrame, pl.DataFrame]:
+        """
+        Update catalogue with WW3 wave data (FAST mode: nearest grid point to centroid).
+        
+        This method adds the following columns:
+        - mean_hs_value: Significant wave height at nearest WW3 grid point
+        - max_hs_value: Same as mean_hs_value (nearest point only)
+        - mean_t01_value: Peak period at nearest WW3 grid point
+        - max_t01_value: Same as mean_t01_value (nearest point only)
+        
+        Note: Values may be NaN if the centroid falls on land or geometry is invalid.
+        
+        Args:
+            catalogue_df: Pandas or Polars catalogue DataFrame
+            n_jobs: Number of parallel workers
+            force_update: If True, recalculate even if columns exist
+            verbose: If True, log progress information
+            
+        Returns:
+            Updated DataFrame (same type as input)
+        """
+        is_polars = isinstance(catalogue_df, pl.DataFrame)
+        is_pandas = isinstance(catalogue_df, pd.DataFrame)
+        
+        if not is_polars and not is_pandas:
+            raise TypeError(f"Unsupported DataFrame type: {type(catalogue_df)}")
+        
+        # Check which columns already exist
+        existing_cols = [col for col in WW3_COLUMNS if col in catalogue_df.columns]
+        
+        if existing_cols and not force_update:
+            logger.info(f"WW3 columns already exist: {existing_cols}")
+            logger.info("Use force_update=True to recalculate")
+            return catalogue_df
+        
+        # Check for time column
+        time_col = None
+        for col in ['start date SAFE', 'start_date']:
+            if col in catalogue_df.columns:
+                time_col = col
+                break
+        
+        if time_col is None:
+            raise ValueError("Missing required time column. Expected: 'start date SAFE' or 'start_date'")
+        
+        # Check for geometry columns
+        geom_cols = ['geometry', 'polygon SLC', 'polygon GRD', 'polygon', 'footprint', 'GeoFootprint']
+        geom_col = None
+        for col in geom_cols:
+            if col in catalogue_df.columns:
+                geom_col = col
+                break
+        
+        if geom_col is None:
+            raise ValueError("No geometry column found. Expected: geometry, polygon SLC, polygon GRD, etc.")
+        
+        if verbose:
+            logger.info(f"Adding WW3 data to {len(catalogue_df)} products")
+            logger.info(f"Using time from: {time_col}")
+            logger.info(f"Using geometry from: {geom_col}")
+            logger.info("Using FAST mode (nearest grid point to centroid)")
+        
+        # For products that already have WW3 data and we're not forcing update
+        if existing_cols and not force_update:
+            if is_polars:
+                pdf = catalogue_df.to_pandas()
+            else:
+                pdf = catalogue_df
+            
+            mask = pdf[existing_cols].isna().any(axis=1)
+            
+            if mask.sum() == 0:
+                if verbose:
+                    logger.info("All products already have WW3 data")
+                return catalogue_df
+            
+            if verbose:
+                logger.info(f"Found {mask.sum()} products missing WW3 data")
+            
+            if is_polars:
+                missing_df = catalogue_df.filter(pl.Series(mask))
+            else:
+                missing_df = catalogue_df.loc[mask].copy()
+            
+            if len(missing_df) > 0:
+                ww3_results = add_ww3_to_catalogue(
+                    missing_df,
+                    config_path=self.config_path,
+                    n_jobs=n_jobs,
+                    verbose=verbose
+                )
+                
+                if is_polars:
+                    result_df = catalogue_df.clone()
+                    for col in WW3_COLUMNS:
+                        if col in ww3_results.columns:
+                            values = ww3_results[col].to_pandas().values
+                            idx = 0
+                            for i in range(len(result_df)):
+                                if mask.iloc[i]:
+                                    result_df = result_df.with_columns(
+                                        pl.when(pl.arange(0, len(result_df)) == i)
+                                        .then(pl.lit(values[idx]))
+                                        .otherwise(pl.col(col))
+                                        .alias(col)
+                                    )
+                                    idx += 1
+                else:
+                    result_df = catalogue_df.copy()
+                    for col in WW3_COLUMNS:
+                        if col in ww3_results.columns:
+                            result_df.loc[mask, col] = ww3_results[col].values
+            else:
+                result_df = catalogue_df
+        else:
+            # All products need WW3 data
+            result_df = add_ww3_to_catalogue(
+                catalogue_df,
+                config_path=self.config_path,
+                n_jobs=n_jobs,
+                verbose=verbose
+            )
+        
+        # Count successful extractions
+        if verbose and 'mean_hs_value' in result_df.columns:
+            if isinstance(result_df, pl.DataFrame):
+                null_count = result_df['mean_hs_value'].null_count()
+            else:
+                null_count = result_df['mean_hs_value'].isna().sum()
+            
+            if null_count == 0:
+                logger.info("All products now have WW3 data")
+            else:
+                logger.info(f"WW3 data available for {len(result_df) - null_count}/{len(result_df)} products")
+                logger.info(f"{null_count} products have missing WW3 data (likely land or invalid geometry)")
+        
+        logger.info("WW3 data added successfully")
+        
+        return result_df
+    
+    def update_batch(self, 
+                     catalogue_df,
+                     sources: List[str] = None,
+                     n_jobs: int = 6,
+                     **kwargs) -> Union[pd.DataFrame, pl.DataFrame]:
+        """
+        Update catalogue with multiple data sources.
+        """
+        if sources is None:
+            sources = ['ww3']
+        
+        result_df = catalogue_df
+        
+        for source in sources:
+            logger.info(f"Updating with {source.upper()} data...")
+            
+            if source == 'ww3':
+                result_df = self.update_with_ww3(
+                    result_df, 
+                    n_jobs=n_jobs,
+                    **kwargs
+                )
+            
+            logger.info(f"Finished {source.upper()} update")
+        
+        return result_df
 
     def _read_one_listing(self, path: Path) -> pl.DataFrame:
         """Read a single listing file (one SAFE name per line)."""
@@ -343,7 +539,7 @@ class CatalogueUpdater:
             f"{slc_count - both_count} SLC-only, {grd_count - both_count} GRD-only, {ocn_count} OCN"
         )
 
-    def core_upate(self, df: pl.DataFrame) -> pl.DataFrame:
+    def core_update(self, df: pl.DataFrame) -> pl.DataFrame:
         """
         Link SLC, GRD, and OCN products using multi-step strategy.
         """
@@ -351,70 +547,83 @@ class CatalogueUpdater:
         logger.info("🚀 Starting SLC-GRD-OCN linking pipeline...")
         logger.info("=" * 60)
         start_total = time.time()
-
+        
         # Step 1: Local SLC-GRD matching
-        logger.info("\n📍 Step 1/7: Local SLC-GRD matching...")
+        logger.info("\n📍 Step 1/8: Local SLC-GRD matching...")
         start = time.time()
         df = self._local_link_slc_grd(df)  # type: ignore[assignment]
         elapsed = time.time() - start
         self._log_catalogue_summary(df, "After local matching")
-        logger.info(f"✅ Step 1/7 completed in {elapsed:.1f}s")
-
+        logger.info(f"✅ Step 1/8 completed in {elapsed:.1f}s")
+        
         # Step 2: CDSE fallback for SLC-GRD orphans
-        logger.info("\n📍 Step 2/7: CDSE fallback for SLC-GRD orphans...")
+        logger.info("\n📍 Step 2/8: CDSE fallback for SLC-GRD orphans...")
         start = time.time()
         df = self._cdse_fallback_link(df)
         df = self._merge_linked_rows(df)
         elapsed = time.time() - start
         self._log_catalogue_summary(df, "After CDSE fallback")
-        logger.info(f"✅ Step 2/7 completed in {elapsed:.1f}s")
-
+        logger.info(f"✅ Step 2/8 completed in {elapsed:.1f}s")
+        
         # Step 3: Link OCN to GRD (primary)
-        logger.info("\n📍 Step 3/7: Linking OCN to GRD products...")
+        logger.info("\n📍 Step 3/8: Linking OCN to GRD products...")
         start = time.time()
         df = self._link_ocn_to_grd(df)
         elapsed = time.time() - start
         self._log_catalogue_summary(df, "After OCN-GRD linking")
-        logger.info(f"✅ Step 3/7 completed in {elapsed:.1f}s")
-
+        logger.info(f"✅ Step 3/8 completed in {elapsed:.1f}s")
+        
         # Step 4: Fallback - Link OCN to SLC
-        logger.info("\n📍 Step 4/7: Fallback - Linking OCN to SLC...")
+        logger.info("\n📍 Step 4/8: Fallback - Linking OCN to SLC...")
         start = time.time()
         df = self._link_ocn_to_slc(df)
         elapsed = time.time() - start
         self._log_catalogue_summary(df, "After OCN-SLC fallback")
-        logger.info(f"✅ Step 4/7 completed in {elapsed:.1f}s")
-
+        logger.info(f"✅ Step 4/8 completed in {elapsed:.1f}s")
+        
         # Step 5: Fetch polygons and S3 paths from CDSE
-        logger.info("\n📍 Step 5/7: Fetching polygons and S3 paths from CDSE...")
+        logger.info("\n📍 Step 5/8: Fetching polygons and S3 paths from CDSE...")
         start = time.time()
         df = self._update_polygons_and_s3paths(df)
         elapsed = time.time() - start
         self._log_catalogue_summary(df, "After polygon fetch")
-        logger.info(f"✅ Step 5/7 completed in {elapsed:.1f}s")
-
+        logger.info(f"✅ Step 5/8 completed in {elapsed:.1f}s")
+        
         # Step 6: Check presence on Ifremer storage (including OCN)
-        logger.info("\n📍 Step 6/7: Checking presence on Ifremer storage...")
+        logger.info("\n📍 Step 6/8: Checking presence on Ifremer storage...")
         start = time.time()
         df = self._update_presence_columns(df, force=False)
         elapsed = time.time() - start
         self._log_catalogue_summary(df, "After presence check")
-        logger.info(f"✅ Step 6/7 completed in {elapsed:.1f}s")
-
+        logger.info(f"✅ Step 6/8 completed in {elapsed:.1f}s")
+        
         # Step 7: Check derived products (L1B, L1C, L2WAV)
-        logger.info("\n📍 Step 7/7: Checking derived products (L1B, L1C, L2WAV)...")
+        logger.info("\n📍 Step 7/8: Checking derived products (L1B, L1C, L2WAV)...")
         start = time.time()
         df = self._update_derived_products(df)
         elapsed = time.time() - start
         self._log_catalogue_summary(df, "After derived products")
-        logger.info(f"✅ Step 7/7 completed in {elapsed:.1f}s")
-
+        logger.info(f"✅ Step 7/8 completed in {elapsed:.1f}s")
+        
+        # Step 8: Add WW3 wave data
+        logger.info("\n📍 Step 8/8: Adding WW3 wave data...")
+        start = time.time()
+        df = self.update_with_ww3(
+            df, 
+            n_jobs=6, 
+            force_update=False, 
+            verbose=True,
+        )
+        elapsed = time.time() - start
+        self._log_catalogue_summary(df, "After WW3 extraction")
+        logger.info(f"✅ Step 8/8 completed in {elapsed:.1f}s")
+        
         total_elapsed = time.time() - start_total
         logger.info("=" * 60)
         logger.info(f"🏁 SLC-GRD-OCN linking complete in {total_elapsed:.1f}s")
         logger.info(f"📊 Final catalogue shape: {df.shape}")
         logger.info("=" * 60)
-
+        
         return df
 
 
