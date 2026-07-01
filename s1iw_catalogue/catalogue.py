@@ -87,7 +87,7 @@ class S1IWCatalogue:
         out_path = Path(output_path) if output_path else self._catalogue_path
         reference_listings = self._config.get("paths", {}).get("reference_listings", {})
         df = self._updater.build_from_listings(reference_listings)
-        df = self._updater.link_slc_grd(df)
+        df = self._updater.core_upate(df)
         df = self._updater._compute_category_and_conflicts(df, reference_listings, out_path)
         self._write_parquet_with_metadata(df, out_path)
         logger.info(f"Catalogue created at {out_path}")
@@ -181,13 +181,13 @@ class S1IWCatalogue:
             )
             merged = merged.drop(["_join_key", "dataset(s) d'appartenance_new"])
 
-            merged = self._updater.link_slc_grd(merged)
+            merged = self._updater.core_upate(merged)
             existing_df = merged
             logger.info(f"Merged {len(rows_to_merge)} existing rows.")
 
         if rows_to_append:
             append_df = pl.DataFrame(rows_to_append, schema=existing_df.schema)
-            append_df = self._updater.link_slc_grd(append_df)
+            append_df = self._updater.core_upate(append_df)
             existing_df = pl.concat([existing_df, append_df], how="vertical_relaxed")
             logger.info(f"Appended {len(rows_to_append)} new rows.")
 

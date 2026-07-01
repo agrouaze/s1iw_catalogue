@@ -343,7 +343,7 @@ class CatalogueUpdater:
             f"{slc_count - both_count} SLC-only, {grd_count - both_count} GRD-only, {ocn_count} OCN"
         )
 
-    def link_slc_grd(self, df: pl.DataFrame) -> pl.DataFrame:
+    def core_upate(self, df: pl.DataFrame) -> pl.DataFrame:
         """
         Link SLC, GRD, and OCN products using multi-step strategy.
         """
@@ -353,53 +353,61 @@ class CatalogueUpdater:
         start_total = time.time()
 
         # Step 1: Local SLC-GRD matching
-        logger.info("\n📍 Step 1/6: Local SLC-GRD matching...")
+        logger.info("\n📍 Step 1/7: Local SLC-GRD matching...")
         start = time.time()
         df = self._local_link_slc_grd(df)  # type: ignore[assignment]
         elapsed = time.time() - start
         self._log_catalogue_summary(df, "After local matching")
-        logger.info(f"✅ Step 1/6 completed in {elapsed:.1f}s")
+        logger.info(f"✅ Step 1/7 completed in {elapsed:.1f}s")
 
         # Step 2: CDSE fallback for SLC-GRD orphans
-        logger.info("\n📍 Step 2/6: CDSE fallback for SLC-GRD orphans...")
+        logger.info("\n📍 Step 2/7: CDSE fallback for SLC-GRD orphans...")
         start = time.time()
         df = self._cdse_fallback_link(df)
         df = self._merge_linked_rows(df)
         elapsed = time.time() - start
         self._log_catalogue_summary(df, "After CDSE fallback")
-        logger.info(f"✅ Step 2/6 completed in {elapsed:.1f}s")
+        logger.info(f"✅ Step 2/7 completed in {elapsed:.1f}s")
 
         # Step 3: Link OCN to GRD (primary)
-        logger.info("\n📍 Step 3/6: Linking OCN to GRD products...")
+        logger.info("\n📍 Step 3/7: Linking OCN to GRD products...")
         start = time.time()
         df = self._link_ocn_to_grd(df)
         elapsed = time.time() - start
         self._log_catalogue_summary(df, "After OCN-GRD linking")
-        logger.info(f"✅ Step 3/6 completed in {elapsed:.1f}s")
+        logger.info(f"✅ Step 3/7 completed in {elapsed:.1f}s")
 
         # Step 4: Fallback - Link OCN to SLC
-        logger.info("\n📍 Step 4/6: Fallback - Linking OCN to SLC...")
+        logger.info("\n📍 Step 4/7: Fallback - Linking OCN to SLC...")
         start = time.time()
         df = self._link_ocn_to_slc(df)
         elapsed = time.time() - start
         self._log_catalogue_summary(df, "After OCN-SLC fallback")
-        logger.info(f"✅ Step 4/6 completed in {elapsed:.1f}s")
+        logger.info(f"✅ Step 4/7 completed in {elapsed:.1f}s")
 
         # Step 5: Fetch polygons and S3 paths from CDSE
-        logger.info("\n📍 Step 5/6: Fetching polygons and S3 paths from CDSE...")
+        logger.info("\n📍 Step 5/7: Fetching polygons and S3 paths from CDSE...")
         start = time.time()
         df = self._update_polygons_and_s3paths(df)
         elapsed = time.time() - start
         self._log_catalogue_summary(df, "After polygon fetch")
-        logger.info(f"✅ Step 5/6 completed in {elapsed:.1f}s")
+        logger.info(f"✅ Step 5/7 completed in {elapsed:.1f}s")
 
         # Step 6: Check presence on Ifremer storage (including OCN)
-        logger.info("\n📍 Step 6/6: Checking presence on Ifremer storage...")
+        logger.info("\n📍 Step 6/7: Checking presence on Ifremer storage...")
         start = time.time()
         df = self._update_presence_columns(df, force=False)
         elapsed = time.time() - start
         self._log_catalogue_summary(df, "After presence check")
-        logger.info(f"✅ Step 6/6 completed in {elapsed:.1f}s")
+        logger.info(f"✅ Step 6/7 completed in {elapsed:.1f}s")
+
+        # Step 7: Check derived products (L1B, L1C, L2WAV)
+        logger.info("\n📍 Step 7/7: Checking derived products (L1B, L1C, L2WAV)...")
+        start = time.time()
+        df = self._update_derived_products(df)
+        elapsed = time.time() - start
+        self._log_catalogue_summary(df, "After derived products")
+        logger.info(f"✅ Step 7/7 completed in {elapsed:.1f}s")
 
         total_elapsed = time.time() - start_total
         logger.info("=" * 60)
@@ -986,6 +994,32 @@ class CatalogueUpdater:
     #     logger.info(f"Found {len(new_rows)} new SAFE entries.")
     #     return pl.DataFrame(new_rows, schema=SCHEMA)
 
+    def _extract_category_value(self, cat) -> str | None:
+        """Extract a single category string from various possible formats."""
+        if cat is None:
+            return None
+        
+        # Si c'est une liste, essayons de l'aplatir
+        if isinstance(cat, list):
+            # Si la liste a un seul élément et que c'est une liste, aplatir
+            if len(cat) == 1 and isinstance(cat[0], list):
+                cat = cat[0]
+            
+            # Si on a maintenant une liste de chaînes
+            if isinstance(cat, list) and len(cat) > 0:
+                # Si c'est une chaîne, la retourner
+                if isinstance(cat[0], str):
+                    return cat[0]
+                # Si c'est une liste de listes, aplatir plus
+                if isinstance(cat[0], list):
+                    return self._extract_category_value(cat[0])
+            return None
+        
+        if isinstance(cat, str) and cat:
+            return cat
+        
+        return None
+
     def _merge_linked_rows(self, df: pl.DataFrame) -> pl.DataFrame:
         """
         For rows that have both SLC and GRD filled, merge column values according to rules.
@@ -1011,7 +1045,10 @@ class CatalogueUpdater:
         logger.info(f"Keeping {unlinked_rows.height} unlinked rows unchanged.")
 
         rows = linked_rows.to_dicts()
+        
+        # FIX #2: More robust category extraction
 
+        
         merged_rows = []
         # Group by (SAFE SLC, SAFE GRD) pair
         pairs: dict[tuple[str, str], list[dict[str, Any]]] = {}
@@ -1067,8 +1104,7 @@ class CatalogueUpdater:
                         merged[poly_col] = val
                         break
 
-            # --- FIX: Merge OCN-related columns by taking first non-null ---
-            # SAFE OCN: first non-null from any row
+            # Merge OCN-related columns by taking first non-null
             safe_ocn_val = None
             for r in rows_list:
                 val = r.get("SAFE OCN")
@@ -1077,7 +1113,6 @@ class CatalogueUpdater:
                     break
             merged["SAFE OCN"] = safe_ocn_val
 
-            # presence OCN: first non-null from any row
             presence_ocn_val = None
             for r in rows_list:
                 val = r.get("presence OCN")
@@ -1086,16 +1121,13 @@ class CatalogueUpdater:
                     break
             merged["presence OCN"] = presence_ocn_val
 
-
             # Merge dataset_category: take highest priority
-            cat1 = merged.get("dataset_category")
-            cat2 = rows_list[1].get("dataset_category") if len(rows_list) > 1 else None  # but we need to consider all rows
-            # Actually we should consider all rows in the group:
             all_cats = []
             for r in rows_list:
-                cat = r.get("dataset_category")
+                cat = self._extract_category_value(r.get("dataset_category"))
                 if cat:
                     all_cats.append(cat)
+            
             if all_cats:
                 best_cat = max(all_cats, key=self._get_category_priority)
                 merged["dataset_category"] = best_cat
@@ -1971,7 +2003,6 @@ class CatalogueUpdater:
         import polars as pl
         from pathlib import Path
 
-        # Convert all inputs to Path objects
         catalogue_paths = [Path(p) for p in catalogue_paths]
         output_path = Path(output_path)
         if config_path:
@@ -1985,24 +2016,22 @@ class CatalogueUpdater:
         for p in catalogue_paths:
             if not p.exists():
                 raise FileNotFoundError(f"Catalogue not found: {p}")
-            # Read only the schema (no data) to compare
             df = pl.read_parquet(p, n_rows=0)
             schemas.append(df.schema)
 
-        # Ensure all schemas are identical
         base_schema = schemas[0]
         for i, s in enumerate(schemas[1:], start=1):
             if s != base_schema:
-                raise ValueError(f"Schema mismatch in {catalogue_paths[i]}. Expected {base_schema}, got {s}")
+                raise ValueError(
+                    f"Schema mismatch in {catalogue_paths[i]}. "
+                    f"Expected {base_schema}, got {s}"
+                )
 
-
-
-        # Read all catalogues into a single DataFrame (lazy scanning could be used for large files)
-        # We'll use pl.scan_parquet for memory efficiency, then collect after grouping.
+        # Read all catalogues lazily
         lazy_dfs = [pl.scan_parquet(str(p)) for p in catalogue_paths]
         combined = pl.concat(lazy_dfs, how="vertical_relaxed")
 
-        # Create unique identifier: SAFE SLC if not null, else SAFE GRD, else SAFE OCN
+        # Create unique identifier
         combined = combined.with_columns(
             pl.when(pl.col("SAFE SLC").is_not_null())
             .then(pl.col("SAFE SLC"))
@@ -2012,46 +2041,81 @@ class CatalogueUpdater:
             .alias("_safe_id")
         )
 
-        # Sort by horodating descending so that the most recent row is first per group
+        # Sort by horodating descending (so .first() gets most recent)
         combined = combined.sort("horodating", descending=True)
 
-        # Group by _safe_id and aggregate
-        # For columns that should be merged, we use:
-        # - first (since sorted, first is the most recent horodating)
-        # - concat_list + unique for dataset(s)
-        # - custom max for category via a map
+        # Define priority function
+        def _category_priority(category: str) -> int:
+            priorities = {"undefined": 0, "train": 1, "val": 2, "test": 3}
+            return priorities.get(category.lower() if category else "", 0)
+
+        def _best_category(categories: list) -> str:
+            if not categories:
+                return "undefined"
+            # Flatten nested lists
+            flat = []
+            for item in categories:
+                if isinstance(item, list):
+                    # If it's a list of lists, flatten
+                    if isinstance(item[0], list):
+                        for sub in item:
+                            flat.extend(sub)
+                    else:
+                        flat.extend(item)
+                else:
+                    flat.append(item)
+            # Remove None and empty strings
+            cats = [c for c in flat if isinstance(c, str) and c]
+            if not cats:
+                return "undefined"
+            return max(cats, key=_category_priority)
+
+        # Flatten dataset_category before grouping
+        # Use map_elements to safely flatten any list columns
+        def _flatten_category(x):
+            if isinstance(x, list):
+                # If it's a list of lists, flatten
+                while isinstance(x, list) and len(x) == 1 and isinstance(x[0], list):
+                    x = x[0]
+                if isinstance(x, list) and len(x) > 0:
+                    # If it's a list of strings, take first
+                    if isinstance(x[0], str):
+                        return x[0]
+                    # If it's still a list of lists, take first item recursively
+                    if isinstance(x[0], list):
+                        return x[0][0] if x[0] and isinstance(x[0][0], str) else None
+                return None
+            return x if isinstance(x, str) else None
+
+        combined = combined.with_columns(
+            pl.col("dataset_category")
+            .map_elements(_flatten_category, return_dtype=pl.Utf8)
+            .alias("dataset_category")
+        )
+
+        # Group and aggregate
         aggregated = combined.group_by("_safe_id").agg([
-            # Primary SAFE columns: take first (most recent row)
             pl.col("SAFE SLC").first().alias("SAFE SLC"),
             pl.col("SAFE GRD").first().alias("SAFE GRD"),
             pl.col("SAFE OCN").first().alias("SAFE OCN"),
-
-            # Dataset list: union of all
-            pl.concat_list("dataset(s) d'appartenance")
-            .list.unique()
+            # Use list.explode() instead of deprecated flatten()
+            pl.col("dataset(s) d'appartenance")
+            .list.explode()
+            .unique()
             .alias("dataset(s) d'appartenance"),
-
-            # Dataset category: highest priority (undefined < train < val < test)
-            # We'll use a custom aggregation with a helper function
-            # But we can use a map_elements on the list of categories
-            # Since we don't have a direct aggregation for category priority, we'll do it after grouping.
-            # We'll first collect all categories per group, then compute the priority later.
+            # Collect categories for each group
             pl.col("dataset_category").alias("_categories"),
-
-            # Presence columns: take first (most recent horodating)
             pl.col("presence SLC").first().alias("presence SLC"),
             pl.col("presence GRD").first().alias("presence GRD"),
             pl.col("presence OCN").first().alias("presence OCN"),
             pl.col("presence L1B XSP A21").first().alias("presence L1B XSP A21"),
             pl.col("presence L1C XSP B17").first().alias("presence L1C XSP B17"),
-
-            # Meteorological and other columns: take first
             pl.col("Hs WW3").first().alias("Hs WW3"),
             pl.col("Tp WW3").first().alias("Tp WW3"),
             pl.col("U10 ecmwf").first().alias("U10 ecmwf"),
             pl.col("v10 ecmwf").first().alias("v10 ecmwf"),
-            pl.col("start date SAFE").first().alias("start date SAFE"),
-            pl.col("horodating").first().alias("horodating"),  # we already sorted by horodating, so first is max
+            pl.col("start date SAFE").min().alias("start date SAFE"),
+            pl.col("horodating").first().alias("horodating"),
             pl.col("polygon SLC").first().alias("polygon SLC"),
             pl.col("polygon GRD").first().alias("polygon GRD"),
             pl.col("S3path SLC").first().alias("S3path SLC"),
@@ -2060,44 +2124,24 @@ class CatalogueUpdater:
             pl.col("unité").first().alias("unité"),
         ])
 
-        # Now compute the category using priority logic from _compute_category_and_conflicts
-        # We need to apply the same priority function to each group's categories.
-        # We can use map_elements on the "_categories" list column.
-        # First, we need to re-import the priority function (or duplicate it).
-        # We'll define a small function inside this method.
-        def _category_priority(category: str) -> int:
-            priorities = {"undefined": 0, "train": 1, "val": 2, "test": 3}
-            return priorities.get(category.lower(), 0)
-
-        def _best_category(categories: list[str]) -> str:
-            if not categories:
-                return "undefined"
-            # Remove None and empty strings
-            categories = [c for c in categories if c]
-            if not categories:
-                return "undefined"
-            # Pick category with highest priority
-            return max(categories, key=_category_priority)
-
-        # Apply the function to the "_categories" column
+        # Apply the best category function to the _categories column
         aggregated = aggregated.with_columns(
             pl.struct(["_categories"])
-            .map_elements(lambda x: _best_category(x["_categories"]), return_dtype=pl.Utf8)
+            .map_elements(
+                lambda x: _best_category(x["_categories"]),
+                return_dtype=pl.Utf8
+            )
             .alias("dataset_category")
         )
 
-        # Drop the temporary _categories column
+        # Drop temporary columns
         aggregated = aggregated.drop("_categories", "_safe_id")
 
-        # Ensure the columns are in the correct order (same as SCHEMA)
-        # Convert to a DataFrame and select columns in SCHEMA order
-        merged_df = aggregated.select(list(SCHEMA.keys()))
+        # Ensure column order matches SCHEMA and collect
+        merged_df = aggregated.collect().select(list(SCHEMA.keys()))
 
-        # Write to output with metadata (using existing helper)
-        # We need a way to write with metadata; since we are in updater, we can call a method from catalogue or handle it here.
-        # We'll write using polars directly, and later the caller can add metadata if needed.
-        # merged_df.write_parquet(output_path, compression="snappy")
-        merged_df.sink_parquet(output_path, compression="snappy")
+        # Write to output
+        merged_df.write_parquet(output_path, compression="snappy")
         logger.info(f"Merged catalogue written to {output_path}")
 
     def update_meteorology(self, df: pl.DataFrame, force: bool = False) -> pl.DataFrame:
