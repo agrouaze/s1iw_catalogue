@@ -1,3 +1,9 @@
+[[tool.uv.index]]
+name = "s1ifr"
+url = "https://__token__${S1IFR_PYPI_TOKEN}@gitlab.ifremer.fr/api/v4/projects/4991/packages/pypi/simple"
+explicit = true
+# --------------------------------------
+
 [build-system]
 requires = ["hatchling", "hatch-vcs"]
 build-backend = "hatchling.build"
@@ -26,12 +32,13 @@ classifiers = [
 requires-python = ">=3.11"
 
 dependencies = [
-  "s1ifr",
+  "s1ifr @ s1ifr",  # <--- CHANGED: Force s1ifr to use the explicit index
   "polars",
   "click",
   "pyyaml",
   "cdsodatacli",
 ]
+
 
 [project.optional-dependencies]
 dev = [

@@ -30,7 +30,9 @@ jobs:
       - uses: astral-sh/setup-uv@v7
 
       - name: Install private dependencies (s1ifr)
-        run: uv pip install s1ifr --extra-index-url https://__token__:${{ secrets.S1IFR_PYPI_TOKEN }}@gitlab.ifremer.fr/api/v4/projects/4991/packages/pypi/simple
+        env:
+          S1IFR_PYPI_TOKEN: ${{ secrets.S1IFR_PYPI_TOKEN }}  # <--- CHANGED
+        run: uv pip install s1ifr --index-url https://__token__${S1IFR_PYPI_TOKEN}@gitlab.ifremer.fr/api/v4/projects/4991/packages/pypi/simple  # <--- CHANGED (extra-index-url -> index-url)
 
       - uses: j178/prek-action@v2
 
@@ -45,9 +47,6 @@ jobs:
       matrix:
         python-version: ["3.10", "3.14"]
         runs-on: [ubuntu-latest]
-        # include:
-        #   - python-version: "pypy-3.11"
-        #     runs-on: ubuntu-latest
 
     steps:
       - uses: actions/checkout@v7
@@ -63,18 +62,13 @@ jobs:
 
       - name: Install package
         env:
-          UV_EXTRA_INDEX_URL: "https://__token__:${{ secrets.S1IFR_PYPI_TOKEN }}@gitlab.ifremer.fr/api/v4/projects/4991/packages/pypi/simple"
+          S1IFR_PYPI_TOKEN: ${{ secrets.S1IFR_PYPI_TOKEN }}  # <--- CHANGED
         run: uv sync --all-extras
 
       - name: Test package
         run: >
           uv run pytest -ra --cov --cov-report=xml --cov-report=term
           --durations=20
-
-      - name: Upload coverage report
-        uses: codecov/codecov-action@v7
-        with:
-          token: ${{ secrets.CODECOV_TOKEN }}
 
   pass:
     if: always()

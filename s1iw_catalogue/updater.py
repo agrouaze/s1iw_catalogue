@@ -41,6 +41,9 @@ class CatalogueUpdater:
             config: Configuration dictionary or path to config file
             config_path: Path to configuration file (alternative to config)
         """
+        # Silence overly verbose third-party loggers
+        logging.getLogger("cdsodatacli.query").setLevel(logging.WARNING)
+        logging.getLogger("cdsodatacli.scripts").setLevel(logging.WARNING)
         # Resolve config path to absolute
         if config_path:
             self._config_path = Path(config_path).resolve()
@@ -591,6 +594,28 @@ class CatalogueUpdater:
         combined = pl.concat([slc_df, grd_df], how="vertical_relaxed").unique()
         logger.info(f"Total combined catalogue rows (before dedup): {combined.height}")
         return combined
+    
+    @staticmethod
+    def _get_peak_memory_gb() -> float:
+        """
+        Get the peak memory usage of the current process in Gigabytes.
+
+        Reads VmHWM (Peak Resident Set Size) from /proc/self/status.
+        This is the most accurate way to measure peak memory on Linux clusters.
+
+        Returns:
+            Peak memory in GB. Returns 0.0 if unavailable (e.g., non-Linux OS).
+        """
+        try:
+            # Linux specific: read Peak Resident Set Size (VmHWM)
+            with open("/proc/self/status", "r", encoding="utf-8") as f:
+                for line in f:
+                    if line.startswith("VmHWM:"):
+                        # Value is in kB, convert to GB
+                        return int(line.split()[1]) / (1024 ** 2)
+        except FileNotFoundError:
+            pass
+        return 0.0
 
     def _log_catalogue_summary(self, df: pl.DataFrame, step_name: str) -> None:
         """Log a summary of the catalogue state after each step."""
@@ -690,10 +715,15 @@ class CatalogueUpdater:
         logger.info(f"✅ Step 9/9 completed in {elapsed:.1f}s")
 
         total_elapsed = time.time() - start_total
+        peak_mem_gb = self._get_peak_memory_gb()
+
         logger.info("=" * 60)
         logger.info(f"🏁 SLC-GRD-OCN linking complete in {total_elapsed:.1f}s")
+        if peak_mem_gb > 0:
+            logger.info(f"🧠 Peak memory consumption: {peak_mem_gb:.2f} Go")
         logger.info(f"📊 Final catalogue shape: {df.shape}")
         logger.info("=" * 60)
+
 
         return df
 
@@ -2128,127 +2158,111 @@ class CatalogueUpdater:
 
     def _link_ocn_to_grd(self, df: pl.DataFrame) -> pl.DataFrame:
         """
-        Link OCN products to GRD products using CDSE.
-        Uses the GRD footprint for spatial filtering when available.
+        Link OCN products to GRD products using CDSE in batch.
+        Marks as "NOT_FOUND" if CDSE cannot find an OCN.
         """
-        logger.info("Linking OCN to GRD products...")
+        logger.info("Step 3: Linking OCN to GRD products...")
 
-        # Find GRD rows without OCN
-        # Filtre : exclure les lignes où SAFE OCN == "NOT_FOUND"
-        grd_without_ocn = df.filter(
-            pl.col("SAFE GRD").is_not_null()
-            & (pl.col("SAFE OCN").is_null() | (pl.col("SAFE OCN") != "NOT_FOUND"))
+        to_query = df.filter(
+            pl.col("SAFE GRD").is_not_null() & pl.col("SAFE OCN").is_null()
         )
 
-        if grd_without_ocn.height == 0:
-            logger.info("All GRD products already have OCN linked.")
+        if to_query.height == 0:
+            logger.info("All GRD products already have OCN linked (or checked).")
             return df
 
-        logger.info(
-            f"Attempting to link OCN for {grd_without_ocn.height} GRD products..."
-        )
-
-        updates = {}
-        for row in grd_without_ocn.to_dicts():
-            grd_name = row["SAFE GRD"]
-            grd_polygon = row.get("polygon GRD")
-
-            try:
-                ocn_name = self._call_cdse_get_ocn_from_grd(grd_name, grd_polygon)
-                if ocn_name:
-                    updates[grd_name] = ocn_name
-                    logger.debug(f"CDSE found OCN for GRD {grd_name} -> {ocn_name}")
-                else:
-                    # Marquer comme "NOT_FOUND" dans SAFE OCN
-                    df = df.with_columns(
-                        pl.when(pl.col("SAFE GRD") == grd_name)
-                        .then(pl.lit("NOT_FOUND"))
-                        .otherwise(pl.col("SAFE OCN"))
-                        .alias("SAFE OCN")
-                    )
-                    logger.warning(f"CDSE could not find OCN for GRD {grd_name}")
-            except Exception as e:
-                logger.error(f"Error linking OCN for GRD {grd_name}: {e}")
-
-        # Apply updates (quand un OCN est trouvé)
-        for grd_name, ocn_name in updates.items():
+        logger.info(f"Attempting to link OCN for {to_query.height} GRD products via batch...")
+        
+        grd_ids = to_query["SAFE GRD"].to_list()
+        mapping_grd_to_ocn = self._batch_cdse_match(grd_ids, "OCN_")
+        
+        found_ocn_ids = set(mapping_grd_to_ocn.keys())
+        
+        # 1. Appliquer les succès via un JOIN
+        if mapping_grd_to_ocn:
+            map_df = pl.DataFrame({
+                "SAFE GRD": list(mapping_grd_to_ocn.keys()),
+                "OCN_MATCH": list(mapping_grd_to_ocn.values())
+            })
+            df = df.join(map_df, on="SAFE GRD", how="left")
             df = df.with_columns(
-                pl.when(pl.col("SAFE GRD") == grd_name)
-                .then(pl.lit(ocn_name))
+                pl.coalesce([pl.col("OCN_MATCH"), pl.col("SAFE OCN")]).alias("SAFE OCN")
+            ).drop("OCN_MATCH")
+            
+        # 2. Marquer les échecs comme "NOT_FOUND"
+        failed_ids = [gid for gid in grd_ids if gid not in found_ocn_ids]
+        if failed_ids:
+            df = df.with_columns(
+                pl.when(pl.col("SAFE GRD").is_in(failed_ids))
+                .then(pl.lit("NOT_FOUND"))
                 .otherwise(pl.col("SAFE OCN"))
                 .alias("SAFE OCN")
             )
+            logger.warning(f"CDSE could not find OCN for {len(failed_ids)} GRD products.")
 
-        logger.info(f"Linked OCN to {len(updates)} GRD products.")
+        logger.info(f"Linked OCN to {len(mapping_grd_to_ocn)} GRD products.")
         return df
 
     def _link_ocn_to_slc(self, df: pl.DataFrame) -> pl.DataFrame:
         """
         Fallback: Link OCN to SLC products when GRD link failed.
+        Uses batched CDSE query. Marks as "NOT_FOUND" if CDSE fails.
         """
-        logger.info("Fallback: Linking OCN to SLC products...")
+        logger.info("Step 4: Fallback - Linking OCN to SLC products...")
 
-        # Find SLC rows without OCN (exclure "NOT_FOUND")
-        slc_without_ocn = df.filter(
+        to_query_base = df.filter(
             pl.col("SAFE SLC").is_not_null()
             & pl.col("SAFE GRD").is_null()
-            & (pl.col("SAFE OCN").is_null() | (pl.col("SAFE OCN") != "NOT_FOUND"))
+            & pl.col("SAFE OCN").is_null()
         )
 
-        if slc_without_ocn.height == 0:
+        if to_query_base.height == 0:
             logger.info("No SLC products need OCN fallback linking.")
             return df
 
-        logger.info(
-            f"Attempting to link OCN for {slc_without_ocn.height} SLC products..."
+        # Exclure les SLC dont le GRD a déjà trouvé un OCN à l'étape 3
+        linked_via_grd_names = set(
+            df.filter(
+                pl.col("SAFE GRD").is_not_null() & pl.col("SAFE OCN").is_not_null()
+            )["SAFE SLC"].to_list()
         )
 
-        # Get list of SLCs that already have OCN via GRD
-        linked_via_grd_names = set()
-        for row in df.filter(
-            pl.col("SAFE GRD").is_not_null()
-            & pl.col("SAFE OCN").is_not_null()
-            & (pl.col("SAFE OCN") != "NOT_FOUND")
-        ).to_dicts():
-            linked_via_grd_names.add(row.get("SAFE SLC"))
+        to_query = to_query_base.filter(~pl.col("SAFE SLC").is_in(linked_via_grd_names))
 
-        updates = {}
-        for row in slc_without_ocn.to_dicts():
-            slc_name = row["SAFE SLC"]
+        if to_query.height == 0:
+            logger.info("All SLC products already have OCN linked via GRD or checked.")
+            return df
 
-            # Skip if this SLC already has a GRD with OCN
-            if slc_name in linked_via_grd_names:
-                continue
-
-            slc_polygon = row.get("polygon SLC")
-
-            try:
-                ocn_name = self._call_cdse_get_ocn_from_slc(slc_name, slc_polygon)
-                if ocn_name:
-                    updates[slc_name] = ocn_name
-                    logger.debug(f"CDSE found OCN for SLC {slc_name} -> {ocn_name}")
-                else:
-                    # Marquer comme "NOT_FOUND" dans SAFE OCN
-                    df = df.with_columns(
-                        pl.when(pl.col("SAFE SLC") == slc_name)
-                        .then(pl.lit("NOT_FOUND"))
-                        .otherwise(pl.col("SAFE OCN"))
-                        .alias("SAFE OCN")
-                    )
-                    logger.warning(f"CDSE could not find OCN for SLC {slc_name}")
-            except Exception as e:
-                logger.error(f"Error linking OCN for SLC {slc_name}: {e}")
-
-        # Apply updates
-        for slc_name, ocn_name in updates.items():
+        logger.info(f"Attempting to link OCN for {to_query.height} SLC products via batch...")
+        
+        slc_ids = to_query["SAFE SLC"].to_list()
+        mapping_slc_to_ocn = self._batch_cdse_match(slc_ids, "OCN_")
+        
+        found_ocn_ids = set(mapping_slc_to_ocn.keys())
+        
+        # 1. Appliquer les succès via un JOIN
+        if mapping_slc_to_ocn:
+            map_df = pl.DataFrame({
+                "SAFE SLC": list(mapping_slc_to_ocn.keys()),
+                "OCN_MATCH": list(mapping_slc_to_ocn.values())
+            })
+            df = df.join(map_df, on="SAFE SLC", how="left")
             df = df.with_columns(
-                pl.when(pl.col("SAFE SLC") == slc_name)
-                .then(pl.lit(ocn_name))
+                pl.coalesce([pl.col("OCN_MATCH"), pl.col("SAFE OCN")]).alias("SAFE OCN")
+            ).drop("OCN_MATCH")
+            
+        # 2. Marquer les échecs comme "NOT_FOUND"
+        failed_ids = [sid for sid in slc_ids if sid not in found_ocn_ids]
+        if failed_ids:
+            df = df.with_columns(
+                pl.when(pl.col("SAFE SLC").is_in(failed_ids))
+                .then(pl.lit("NOT_FOUND"))
                 .otherwise(pl.col("SAFE OCN"))
                 .alias("SAFE OCN")
             )
+            logger.warning(f"CDSE could not find OCN for {len(failed_ids)} SLC products.")
 
-        logger.info(f"Linked OCN to {len(updates)} SLC products.")
+        logger.info(f"Linked OCN to {len(mapping_slc_to_ocn)} SLC products.")
         return df
 
     def _call_cdse_get_ocn_from_grd(
