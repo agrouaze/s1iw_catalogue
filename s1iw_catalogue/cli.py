@@ -2,18 +2,20 @@
 
 from typing import Optional
 
+import logging
 from pathlib import Path
 
 import click
-import logging
+
 from s1iw_catalogue.catalogue import S1IWCatalogue
 from s1iw_catalogue.config import load_config
 from s1iw_catalogue.stats import CatalogueStats
 
 logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+    level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
 )
+
+
 @click.group()
 @click.option(
     "--config", "-c", type=click.Path(exists=True), help="Path to configuration file."
@@ -29,14 +31,20 @@ def main(ctx: click.Context, config: Path | None) -> None:
 
 
 @main.command()
-@click.option("--output", "-o", required=True, type=click.Path(), help="Output .parquet file path.")
+@click.option(
+    "--output",
+    "-o",
+    required=True,
+    type=click.Path(),
+    help="Output .parquet file path.",
+)
 @click.option(
     "--listing",
     "-l",
     help="Name of a single dataset/listing from the config file to use (e.g., ciaran2023). If omitted, all listings are used.",
 )
 @click.pass_context
-def create(ctx: click.Context, output: Path, listing: Optional[str]) -> None:
+def create(ctx: click.Context, output: Path, listing: str | None) -> None:
     """Create a brand new catalogue from scratch."""
     cfg = ctx.obj["config"]
     config_path = ctx.obj.get("config_path")
@@ -46,13 +54,19 @@ def create(ctx: click.Context, output: Path, listing: Optional[str]) -> None:
     if listing:
         reference_listings = cfg.get("paths", {}).get("reference_listings", {})
         if listing not in reference_listings:
-            click.echo(f"Error: Listing '{listing}' not found in configuration.", err=True)
+            click.echo(
+                f"Error: Listing '{listing}' not found in configuration.", err=True
+            )
             raise click.Abort()
         # Create a filtered config dict that only contains that listing
         filtered_config = cfg.copy()
-        filtered_config["paths"] = {"reference_listings": {listing: reference_listings[listing]}}
+        filtered_config["paths"] = {
+            "reference_listings": {listing: reference_listings[listing]}
+        }
         # Recreate the catalogue with the filtered config
-        cat = S1IWCatalogue(catalogue_path=output, config=filtered_config, config_path=config_path)
+        cat = S1IWCatalogue(
+            catalogue_path=output, config=filtered_config, config_path=config_path
+        )
 
     cat.create(output_path=output)
     click.echo("Done.")
@@ -187,7 +201,13 @@ def query(ctx: click.Context, catalogue: Path, safe_name: str) -> None:
 @main.command()
 @click.option("--host", default="127.0.0.1", help="Host to bind the web server to.")
 @click.option("--port", default=8649, type=int, help="Port to bind the web server to.")
-@click.option("--catalogue", "-c", required=True, type=click.Path(exists=True), help="Catalogue .parquet file to serve.")
+@click.option(
+    "--catalogue",
+    "-c",
+    required=True,
+    type=click.Path(exists=True),
+    help="Catalogue .parquet file to serve.",
+)
 @click.option("--reload", is_flag=True, help="Enable auto-reload for development.")
 @click.pass_context
 def serve(
@@ -199,15 +219,17 @@ def serve(
 ) -> None:
     """Launch web interface to explore the catalogue."""
     import os
+
     os.environ["S1IW_CATALOGUE_PATH"] = str(catalogue)
-    
+
     click.echo(f"🚀 Starting web server at http://{host}:{port}")
     click.echo(f"📁 Serving catalogue: {catalogue}")
     click.echo("📖 API docs available at /docs")
-    
+
     import uvicorn
+
     from s1iw_catalogue.web.app import app
-    
+
     uvicorn.run(
         "s1iw_catalogue.web.app:app",
         host=host,

@@ -1,9 +1,10 @@
 """Custom template engine to bypass Jinja2 cache issues."""
 
-from pathlib import Path
-from typing import Optional, Dict, Any
+from typing import Any, Dict, Optional
 
-from jinja2 import Environment, FileSystemLoader, select_autoescape, Template
+from pathlib import Path
+
+from jinja2 import Environment, FileSystemLoader, Template, select_autoescape
 from starlette.background import BackgroundTask
 from starlette.responses import HTMLResponse
 
@@ -12,7 +13,7 @@ class CustomTemplates:
     """
     Custom template wrapper that bypasses Jinja2's cache issues.
     """
-    
+
     def __init__(self, directory: str):
         self.directory = Path(directory)
         self.env = Environment(
@@ -21,15 +22,15 @@ class CustomTemplates:
             cache_size=0,
             auto_reload=True,
         )
-    
+
     def TemplateResponse(
         self,
         name: str,
-        context: Dict[str, Any],
+        context: dict[str, Any],
         status_code: int = 200,
-        headers: Optional[Dict[str, str]] = None,
-        media_type: Optional[str] = None,
-        background: Optional[BackgroundTask] = None,
+        headers: dict[str, str] | None = None,
+        media_type: str | None = None,
+        background: BackgroundTask | None = None,
     ):
         """
         Render a template and return an HTMLResponse.
@@ -42,7 +43,7 @@ class CustomTemplates:
             cache_size=0,
             auto_reload=True,
         )
-        
+
         try:
             template = env.get_template(name)
             content = template.render(**context)
@@ -51,15 +52,15 @@ class CustomTemplates:
             template_path = self.directory / name
             if not template_path.exists():
                 raise FileNotFoundError(f"Template not found: {template_path}")
-            
-            with open(template_path, "r") as f:
+
+            with open(template_path) as f:
                 template_content = f.read()
-            
+
             # Create a Template directly with the environment
             template = Template(template_content)
             template.environment = env
             content = template.render(**context)
-        
+
         return HTMLResponse(
             content=content,
             status_code=status_code,
@@ -70,10 +71,10 @@ class CustomTemplates:
 
 
 # Singleton instance
-_templates: Optional[CustomTemplates] = None
+_templates: CustomTemplates | None = None
 
 
-def get_templates(directory: Optional[str] = None) -> CustomTemplates:
+def get_templates(directory: str | None = None) -> CustomTemplates:
     """Get or create the templates instance."""
     global _templates
     if _templates is None:

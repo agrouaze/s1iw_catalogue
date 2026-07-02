@@ -360,7 +360,7 @@ make cleanup            # removes pycache, .DS_Store, .mypy_cache, .pytest_cache
 
 ## Releases
 
-We follow [Semantic Versions](https://semver.org/).  
+We follow [Semantic Versions](https://semver.org/).
 See [GitHub Releases](https://github.com/agrouaze/s1iw_catalogue/releases) for changelog.
 
 ## License

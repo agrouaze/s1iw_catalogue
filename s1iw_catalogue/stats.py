@@ -46,9 +46,7 @@ class CatalogueStats:
     def presence_completeness(self, dataset: str | None = None) -> dict[str, float]:
         """Compute percentages of non-null presence columns."""
         if dataset is not None:
-            filtered = self.df.filter(
-                pl.col("datasets").list.contains(dataset)
-            )
+            filtered = self.df.filter(pl.col("datasets").list.contains(dataset))
         else:
             filtered = self.df
 

@@ -1,27 +1,29 @@
 """Statistics API routes."""
 
-import logging
-from typing import Dict, Any
+from typing import Any, Dict
 
-from fastapi import APIRouter, HTTPException
+import logging
+
 import polars as pl
+from fastapi import APIRouter, HTTPException
+
 from s1iw_catalogue.stats import CatalogueStats
+from s1iw_catalogue.web.models import DatasetCompletenessResponse, GlobalStatsResponse
 from s1iw_catalogue.web.utils.data_loader import catalogue_manager
-from s1iw_catalogue.web.models import GlobalStatsResponse, DatasetCompletenessResponse
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
 @router.get("/global", response_model=GlobalStatsResponse)
-async def get_global_stats() -> Dict[str, Any]:
+async def get_global_stats() -> dict[str, Any]:
     """Get global statistics about the catalogue."""
     if not catalogue_manager.is_loaded():
         raise HTTPException(status_code=503, detail="Catalogue not loaded")
-    
+
     df = catalogue_manager.df
     stats = CatalogueStats(df)
-    
+
     # Compute global stats
     result = {
         "total_count": stats.total_count(),
@@ -36,7 +38,7 @@ async def get_global_stats() -> Dict[str, Any]:
         "latest_acquisition": stats.latest_acquisition(),
         "latest_horodating": stats.latest_horodating(),
     }
-    
+
     # Convert datetime objects to ISO strings
     if result["latest_acquisition"][1]:
         result["latest_acquisition"] = (
@@ -48,18 +50,18 @@ async def get_global_stats() -> Dict[str, Any]:
             result["latest_horodating"][0],
             result["latest_horodating"][1].isoformat(),
         )
-    
+
     return result
 
 
 @router.get("/datasets", response_model=DatasetCompletenessResponse)
-async def get_dataset_completeness() -> Dict[str, Any]:
+async def get_dataset_completeness() -> dict[str, Any]:
     """Get dataset completeness matrix."""
     if not catalogue_manager.is_loaded():
         raise HTTPException(status_code=503, detail="Catalogue not loaded")
-    
+
     df = catalogue_manager.df
-    
+
     presence_cols = [
         "PATH SLC",
         "PATH GRD",
@@ -67,38 +69,36 @@ async def get_dataset_completeness() -> Dict[str, Any]:
         "PATH L1B XSP A21",
         "PATH L1C XSP B17",
     ]
-    
+
     # Get all datasets
     if "datasets" not in df.columns:
         return {"datasets": {}, "overall": {}}
-    
-    datasets = df.select(
-        pl.col("datasets").explode().unique()
-    ).to_series().to_list()
-    
+
+    datasets = df.select(pl.col("datasets").explode().unique()).to_series().to_list()
+
     results = {}
     for dataset in datasets:
-        dataset_df = df.filter(
-            pl.col("datasets").list.contains(dataset)
-        )
+        dataset_df = df.filter(pl.col("datasets").list.contains(dataset))
         total = dataset_df.height
-        
+
         dataset_results = {}
         for col in presence_cols:
             if col in dataset_df.columns:
                 present = dataset_df.filter(pl.col(col).is_not_null()).height
                 pct = (present / total * 100) if total > 0 else 0.0
                 dataset_results[col] = round(pct, 1)
-        
+
         # Calculate overall average
         presence_values = [v for k, v in dataset_results.items() if k != "PATH OCN"]
         if presence_values:
-            dataset_results["overall"] = round(sum(presence_values) / len(presence_values), 1)
+            dataset_results["overall"] = round(
+                sum(presence_values) / len(presence_values), 1
+            )
         else:
             dataset_results["overall"] = 0.0
-        
+
         results[dataset] = dataset_results
-    
+
     # Overall row
     overall_results = {}
     for col in presence_cols:
@@ -107,13 +107,15 @@ async def get_dataset_completeness() -> Dict[str, Any]:
             present = df.filter(pl.col(col).is_not_null()).height
             pct = (present / total * 100) if total > 0 else 0.0
             overall_results[col] = round(pct, 1)
-    
+
     presence_values = [v for k, v in overall_results.items() if k != "PATH OCN"]
     if presence_values:
-        overall_results["overall"] = round(sum(presence_values) / len(presence_values), 1)
+        overall_results["overall"] = round(
+            sum(presence_values) / len(presence_values), 1
+        )
     else:
         overall_results["overall"] = 0.0
-    
+
     return {
         "datasets": results,
         "overall": overall_results,
@@ -121,13 +123,13 @@ async def get_dataset_completeness() -> Dict[str, Any]:
 
 
 @router.get("/presence")
-async def get_presence_stats() -> Dict[str, float]:
+async def get_presence_stats() -> dict[str, float]:
     """Get overall presence percentages per column."""
     if not catalogue_manager.is_loaded():
         raise HTTPException(status_code=503, detail="Catalogue not loaded")
-    
+
     df = catalogue_manager.df
-    
+
     presence_cols = [
         "PATH SLC",
         "PATH GRD",
@@ -135,12 +137,12 @@ async def get_presence_stats() -> Dict[str, float]:
         "PATH L1B XSP A21",
         "PATH L1C XSP B17",
     ]
-    
+
     result = {}
     for col in presence_cols:
         if col in df.columns:
             total = df.height
             present = df.filter(pl.col(col).is_not_null()).height
             result[col] = round((present / total * 100) if total > 0 else 0.0, 1)
-    
+
     return result

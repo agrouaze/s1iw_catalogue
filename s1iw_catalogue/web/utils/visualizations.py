@@ -1,14 +1,15 @@
 """Plotly visualization generators for API responses."""
 
-import json
-from typing import Dict, List, Optional, Any
+from typing import Any, Dict, List, Optional
 
-import polars as pl
+import json
+
 import plotly.graph_objects as go
+import polars as pl
 from plotly.utils import PlotlyJSONEncoder
 
 
-def create_presence_bar_chart(df: pl.DataFrame) -> Dict[str, Any]:
+def create_presence_bar_chart(df: pl.DataFrame) -> dict[str, Any]:
     """
     Create a bar chart showing presence completeness per column.
     Returns Plotly figure as JSON.
@@ -20,11 +21,11 @@ def create_presence_bar_chart(df: pl.DataFrame) -> Dict[str, Any]:
         "PATH L1B XSP A21",
         "PATH L1C XSP B17",
     ]
-    
+
     labels = []
     values = []
     colors = []
-    
+
     for col in presence_cols:
         if col in df.columns:
             total = df.height
@@ -40,17 +41,19 @@ def create_presence_bar_chart(df: pl.DataFrame) -> Dict[str, Any]:
                 colors.append("#dc3545")
             else:
                 colors.append("#6c757d")
-    
-    fig = go.Figure(data=[
-        go.Bar(
-            x=labels,
-            y=values,
-            marker_color=colors,
-            text=[f"{v:.1f}%" for v in values],
-            textposition="outside",
-        )
-    ])
-    
+
+    fig = go.Figure(
+        data=[
+            go.Bar(
+                x=labels,
+                y=values,
+                marker_color=colors,
+                text=[f"{v:.1f}%" for v in values],
+                textposition="outside",
+            )
+        ]
+    )
+
     fig.update_layout(
         title="Presence Completeness",
         yaxis_title="Percentage",
@@ -58,21 +61,20 @@ def create_presence_bar_chart(df: pl.DataFrame) -> Dict[str, Any]:
         height=400,
         margin=dict(l=0, r=0, t=40, b=0),
     )
-    
+
     return json.loads(json.dumps(fig, cls=PlotlyJSONEncoder))
 
 
 def create_dataset_completeness_table(
-    datasets_data: Dict[str, Dict[str, float]],
-    overall: Dict[str, float]
-) -> Dict[str, Any]:
+    datasets_data: dict[str, dict[str, float]], overall: dict[str, float]
+) -> dict[str, Any]:
     """
     Create an interactive dataset completeness table using Plotly.
     """
     headers = ["Dataset", "SLC", "GRD", "OCN", "L1B A21", "L1C B17", "Overall"]
-    
+
     rows = []
-    
+
     for dataset, metrics in sorted(datasets_data.items()):
         row = [dataset]
         row.append(f"{metrics.get('PATH SLC', 0):.1f}%")
@@ -82,7 +84,7 @@ def create_dataset_completeness_table(
         row.append(f"{metrics.get('PATH L1C XSP B17', 0):.1f}%")
         row.append(f"{metrics.get('overall', 0):.1f}%")
         rows.append(row)
-    
+
     # Add overall row
     overall_row = ["**Overall**"]
     overall_row.append(f"{overall.get('PATH SLC', 0):.1f}%")
@@ -92,29 +94,31 @@ def create_dataset_completeness_table(
     overall_row.append(f"{overall.get('PATH L1C XSP B17', 0):.1f}%")
     overall_row.append(f"{overall.get('overall', 0):.1f}%")
     rows.append(overall_row)
-    
-    fig = go.Figure(data=[
-        go.Table(
-            header=dict(
-                values=headers,
-                fill_color="#2c3e50",
-                font=dict(color="white", size=12),
-                align="center",
-            ),
-            cells=dict(
-                values=[list(col) for col in zip(*rows)],
-                fill_color=[["#f8f9fa", "white"] * len(rows)],
-                align=["left"] + ["center"] * (len(headers) - 1),
-                font=dict(size=11),
-                height=25,
-            ),
-        )
-    ])
-    
+
+    fig = go.Figure(
+        data=[
+            go.Table(
+                header=dict(
+                    values=headers,
+                    fill_color="#2c3e50",
+                    font=dict(color="white", size=12),
+                    align="center",
+                ),
+                cells=dict(
+                    values=[list(col) for col in zip(*rows)],
+                    fill_color=[["#f8f9fa", "white"] * len(rows)],
+                    align=["left"] + ["center"] * (len(headers) - 1),
+                    font=dict(size=11),
+                    height=25,
+                ),
+            )
+        ]
+    )
+
     fig.update_layout(
         title="Dataset Completeness",
         height=400 + len(rows) * 30,
         margin=dict(l=0, r=0, t=40, b=0),
     )
-    
+
     return json.loads(json.dumps(fig, cls=PlotlyJSONEncoder))

@@ -182,32 +182,32 @@
     .viz-grid {
         grid-template-columns: 1fr;
     }
-    
+
     .filter-row {
         flex-direction: column;
         gap: 10px;
     }
-    
+
     .filter-group {
         min-width: 100%;
     }
-    
+
     .date-range {
         flex-direction: column;
     }
-    
+
     .filter-actions {
         width: 100%;
         justify-content: flex-start;
         flex-wrap: wrap;
     }
-    
+
     .filter-actions .btn {
         flex: 1;
         min-width: 80px;
         text-align: center;
     }
-    
+
     .results-scroll {
         max-height: 300px;
     }
@@ -217,20 +217,20 @@
     .filter-section {
         padding: 16px;
     }
-    
+
     .viz-item {
         padding: 12px;
     }
-    
+
     .plot-container {
         height: 200px;
     }
-    
+
     #pagination {
         flex-wrap: wrap;
         gap: 8px;
     }
-    
+
     #pagination .btn {
         min-width: 60px;
         padding: 6px 12px;

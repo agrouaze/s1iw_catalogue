@@ -2,13 +2,13 @@
 
 import datetime
 from pathlib import Path
-from unittest.mock import patch, MagicMock
+from unittest.mock import MagicMock, patch
 
 import polars as pl
 import pytest
 
-from s1iw_catalogue.updater import CatalogueUpdater
 from s1iw_catalogue.schema import SCHEMA
+from s1iw_catalogue.updater import CatalogueUpdater
 
 
 @pytest.fixture
@@ -21,13 +21,9 @@ def dummy_config():
                 "test_slc": {
                     "path": "dummy_slc.txt",
                     "type": "slc",
-                    "category": "train"
+                    "category": "train",
                 },
-                "test_grd": {
-                    "path": "dummy_grd.txt",
-                    "type": "grd",
-                    "category": "val"
-                }
+                "test_grd": {"path": "dummy_grd.txt", "type": "grd", "category": "val"},
             }
         },
         "product_versions": {"l1b": ["A21"], "l1c": ["B17"]},
@@ -66,8 +62,12 @@ S1A_IW_GRDH_1SDV_20250102T000001_20250102T000028_000002_000002_0004.SAFE
 @pytest.fixture
 def sample_catalogue_df():
     data = {
-        "SAFE SLC": ["S1A_IW_SLC__1SDV_20250101T000000_20250101T000027_000001_000001_0001.SAFE"],
-        "SAFE GRD": ["S1A_IW_GRDH_1SDV_20250101T000001_20250101T000028_000001_000001_0003.SAFE"],
+        "SAFE SLC": [
+            "S1A_IW_SLC__1SDV_20250101T000000_20250101T000027_000001_000001_0001.SAFE"
+        ],
+        "SAFE GRD": [
+            "S1A_IW_GRDH_1SDV_20250101T000001_20250101T000028_000001_000001_0003.SAFE"
+        ],
         "SAFE OCN": [None],
         "PATH SLC": ["/path/to/slc"],
         "PATH GRD": ["/path/to/grd"],
@@ -96,7 +96,9 @@ class TestParseSafeName:
     """Tests for parse_safe_name static method."""
 
     def test_parse_valid_slc(self):
-        name = "S1A_IW_SLC__1SDV_20250101T000000_20250101T000027_000001_000001_0001.SAFE"
+        name = (
+            "S1A_IW_SLC__1SDV_20250101T000000_20250101T000027_000001_000001_0001.SAFE"
+        )
         result = CatalogueUpdater.parse_safe_name(name)
         expected = {
             "safe_name": name,
@@ -109,7 +111,9 @@ class TestParseSafeName:
         assert result == expected
 
     def test_parse_valid_grd(self):
-        name = "S1A_IW_GRDH_1SDV_20250101T000001_20250101T000028_000001_000001_0003.SAFE"
+        name = (
+            "S1A_IW_GRDH_1SDV_20250101T000001_20250101T000028_000001_000001_0003.SAFE"
+        )
         result = CatalogueUpdater.parse_safe_name(name)
         assert result["product_type"] == "GRDH"
         assert result["start_date"] == datetime.datetime(2025, 1, 1, 0, 0, 1)
@@ -124,10 +128,15 @@ class TestReadListings:
 
     def test_read_one_listing_exists(self, tmp_path, updater):
         path = tmp_path / "listing.txt"
-        path.write_text("S1A_IW_SLC__1SDV_20250101T000000_20250101T000027_000001_000001_0001.SAFE\n")
+        path.write_text(
+            "S1A_IW_SLC__1SDV_20250101T000000_20250101T000027_000001_000001_0001.SAFE\n"
+        )
         df = updater._read_one_listing(path)
         assert df.height == 1
-        assert df["safe_name"][0] == "S1A_IW_SLC__1SDV_20250101T000000_20250101T000027_000001_000001_0001.SAFE"
+        assert (
+            df["safe_name"][0]
+            == "S1A_IW_SLC__1SDV_20250101T000000_20250101T000027_000001_000001_0001.SAFE"
+        )
 
     def test_read_one_listing_not_exists(self, updater):
         df = updater._read_one_listing(Path("/nonexistent"))
@@ -135,15 +144,21 @@ class TestReadListings:
 
     def test_read_listings_single_file(self, tmp_path, updater):
         path = tmp_path / "listing.txt"
-        path.write_text("S1A_IW_SLC__1SDV_20250101T000000_20250101T000027_000001_000001_0001.SAFE\n")
+        path.write_text(
+            "S1A_IW_SLC__1SDV_20250101T000000_20250101T000027_000001_000001_0001.SAFE\n"
+        )
         df = updater.read_listings(path)
         assert df.height == 1
 
     def test_read_listings_directory(self, tmp_path, updater):
         dir_path = tmp_path / "listings"
         dir_path.mkdir()
-        (dir_path / "a.txt").write_text("S1A_IW_SLC__1SDV_20250101T000000_20250101T000027_000001_000001_0001.SAFE\n")
-        (dir_path / "b.txt").write_text("S1A_IW_SLC__1SDV_20250102T000000_20250102T000027_000001_000001_0002.SAFE\n")
+        (dir_path / "a.txt").write_text(
+            "S1A_IW_SLC__1SDV_20250101T000000_20250101T000027_000001_000001_0001.SAFE\n"
+        )
+        (dir_path / "b.txt").write_text(
+            "S1A_IW_SLC__1SDV_20250102T000000_20250102T000027_000001_000001_0002.SAFE\n"
+        )
         df = updater.read_listings(dir_path)
         assert df.height == 2
 
@@ -153,14 +168,19 @@ class TestBuildFromListings:
 
     def test_build_from_listings_single_slc(self, tmp_path, updater):
         slc_path = tmp_path / "slc.txt"
-        slc_path.write_text("S1A_IW_SLC__1SDV_20250101T000000_20250101T000027_000001_000001_0001.SAFE\n")
+        slc_path.write_text(
+            "S1A_IW_SLC__1SDV_20250101T000000_20250101T000027_000001_000001_0001.SAFE\n"
+        )
         listings = {
             "test_slc": {"path": str(slc_path), "type": "slc", "category": "train"}
         }
         df = updater.build_from_listings(listings)
         assert df.height == 1
         assert df.shape[0] == 1
-        assert df["SAFE SLC"][0] == "S1A_IW_SLC__1SDV_20250101T000000_20250101T000027_000001_000001_0001.SAFE"
+        assert (
+            df["SAFE SLC"][0]
+            == "S1A_IW_SLC__1SDV_20250101T000000_20250101T000027_000001_000001_0001.SAFE"
+        )
         # assert df["datasets"][0] == ["test_slc"]
         assert df.select(pl.col("datasets")).row(0)[0] == ["test_slc"]
         # category should be set after compute_category step, but build_from_listings doesn't set it.
@@ -168,12 +188,16 @@ class TestBuildFromListings:
 
     def test_build_from_listings_mixed(self, tmp_path, updater):
         slc_path = tmp_path / "slc.txt"
-        slc_path.write_text("S1A_IW_SLC__1SDV_20250101T000000_20250101T000027_000001_000001_0001.SAFE\n")
+        slc_path.write_text(
+            "S1A_IW_SLC__1SDV_20250101T000000_20250101T000027_000001_000001_0001.SAFE\n"
+        )
         grd_path = tmp_path / "grd.txt"
-        grd_path.write_text("S1A_IW_GRDH_1SDV_20250101T000001_20250101T000028_000001_000001_0003.SAFE\n")
+        grd_path.write_text(
+            "S1A_IW_GRDH_1SDV_20250101T000001_20250101T000028_000001_000001_0003.SAFE\n"
+        )
         listings = {
             "test_slc": {"path": str(slc_path), "type": "slc", "category": "train"},
-            "test_grd": {"path": str(grd_path), "type": "grd", "category": "val"}
+            "test_grd": {"path": str(grd_path), "type": "grd", "category": "val"},
         }
         df = updater.build_from_listings(listings)
         assert df.height == 2
@@ -184,10 +208,10 @@ class TestBuildFromListings:
 
     def test_build_from_listings_invalid_type_skipped(self, tmp_path, updater):
         path = tmp_path / "dummy.txt"
-        path.write_text("S1A_IW_SLC__1SDV_20250101T000000_20250101T000027_000001_000001_0001.SAFE\n")
-        listings = {
-            "test": {"path": str(path), "type": "invalid"}
-        }
+        path.write_text(
+            "S1A_IW_SLC__1SDV_20250101T000000_20250101T000027_000001_000001_0001.SAFE\n"
+        )
+        listings = {"test": {"path": str(path), "type": "invalid"}}
         df = updater.build_from_listings(listings)
         assert df.height == 0
 
@@ -196,8 +220,12 @@ class TestLocalLinkSlcGrd:
     """Tests for _local_link_slc_grd."""
 
     def test_local_link_with_matching(self, updater):
-        slc_name = "S1A_IW_SLC__1SDV_20250101T000000_20250101T000027_000001_000001_0001.SAFE"
-        grd_name = "S1A_IW_GRDH_1SDV_20250101T000001_20250101T000028_000001_000001_0003.SAFE"
+        slc_name = (
+            "S1A_IW_SLC__1SDV_20250101T000000_20250101T000027_000001_000001_0001.SAFE"
+        )
+        grd_name = (
+            "S1A_IW_GRDH_1SDV_20250101T000001_20250101T000028_000001_000001_0003.SAFE"
+        )
         data = {
             "SAFE SLC": [None, slc_name],
             "SAFE GRD": [grd_name, None],
@@ -213,8 +241,14 @@ class TestLocalLinkSlcGrd:
             "Tp WW3": [None, None],
             "U10 ecmwf": [None, None],
             "v10 ecmwf": [None, None],
-            "start date SAFE": [datetime.datetime(2025, 1, 1, 0, 0, 1), datetime.datetime(2025, 1, 1, 0, 0, 0)],
-            "horodating": [datetime.datetime(2025, 1, 1), datetime.datetime(2025, 1, 1)],
+            "start date SAFE": [
+                datetime.datetime(2025, 1, 1, 0, 0, 1),
+                datetime.datetime(2025, 1, 1, 0, 0, 0),
+            ],
+            "horodating": [
+                datetime.datetime(2025, 1, 1),
+                datetime.datetime(2025, 1, 1),
+            ],
             "polygon SLC": [None, None],
             "polygon GRD": [None, None],
             "S3path SLC": [None, None],
@@ -224,11 +258,15 @@ class TestLocalLinkSlcGrd:
         }
         df = pl.DataFrame(data, schema=SCHEMA)
         result = updater._local_link_slc_grd(df)
-        linked = result.filter(pl.col("SAFE SLC").is_not_null() & pl.col("SAFE GRD").is_not_null())
+        linked = result.filter(
+            pl.col("SAFE SLC").is_not_null() & pl.col("SAFE GRD").is_not_null()
+        )
         assert linked.height == 2
 
     def test_local_link_no_match(self, updater):
-        grd_name = "S1A_IW_GRDH_1SDV_20250101T000001_20250101T000028_000001_000001_0003.SAFE"
+        grd_name = (
+            "S1A_IW_GRDH_1SDV_20250101T000001_20250101T000028_000001_000001_0003.SAFE"
+        )
         data = {
             "SAFE SLC": [None],
             "SAFE GRD": [grd_name],
@@ -255,7 +293,9 @@ class TestLocalLinkSlcGrd:
         }
         df = pl.DataFrame(data, schema=SCHEMA)
         result = updater._local_link_slc_grd(df)
-        linked = result.filter(pl.col("SAFE SLC").is_not_null() & pl.col("SAFE GRD").is_not_null())
+        linked = result.filter(
+            pl.col("SAFE SLC").is_not_null() & pl.col("SAFE GRD").is_not_null()
+        )
         assert linked.height == 0
 
 
@@ -280,8 +320,14 @@ class TestMergeLinkedRows:
             "Tp WW3": [None, None],
             "U10 ecmwf": [None, None],
             "v10 ecmwf": [None, None],
-            "start date SAFE": [datetime.datetime(2025, 1, 1), datetime.datetime(2025, 1, 1)],
-            "horodating": [datetime.datetime(2025, 1, 1, 10), datetime.datetime(2025, 1, 1, 12)],
+            "start date SAFE": [
+                datetime.datetime(2025, 1, 1),
+                datetime.datetime(2025, 1, 1),
+            ],
+            "horodating": [
+                datetime.datetime(2025, 1, 1, 10),
+                datetime.datetime(2025, 1, 1, 12),
+            ],
             "polygon SLC": [None, None],
             "polygon GRD": [None, None],
             "S3path SLC": [None, None],
@@ -303,30 +349,33 @@ class TestComputeCategoryAndConflicts:
     """Tests for _compute_category_and_conflicts."""
 
     def test_category_priority_simple(self, updater, tmp_path):
-        df = pl.DataFrame({
-            "SAFE SLC": ["SLC1"],
-            "SAFE GRD": [None],
-            "SAFE OCN": [None],
-            "PATH SLC": [None],
-            "PATH GRD": [None],
-            "PATH OCN": [None],
-            "PATH L1B XSP A21": [None],
-            "PATH L1C XSP B17": [None],
-            "datasets": [["train_ds", "val_ds"]],
-            "category": [None],
-            "Hs WW3": [None],
-            "Tp WW3": [None],
-            "U10 ecmwf": [None],
-            "v10 ecmwf": [None],
-            "start date SAFE": [datetime.datetime(2025, 1, 1)],
-            "horodating": [datetime.datetime(2025, 1, 1)],
-            "polygon SLC": [None],
-            "polygon GRD": [None],
-            "S3path SLC": [None],
-            "S3path GRD": [None],
-            "polarization": ["1SDV"],
-            "unit": ["S1A"],
-        }, schema=SCHEMA)
+        df = pl.DataFrame(
+            {
+                "SAFE SLC": ["SLC1"],
+                "SAFE GRD": [None],
+                "SAFE OCN": [None],
+                "PATH SLC": [None],
+                "PATH GRD": [None],
+                "PATH OCN": [None],
+                "PATH L1B XSP A21": [None],
+                "PATH L1C XSP B17": [None],
+                "datasets": [["train_ds", "val_ds"]],
+                "category": [None],
+                "Hs WW3": [None],
+                "Tp WW3": [None],
+                "U10 ecmwf": [None],
+                "v10 ecmwf": [None],
+                "start date SAFE": [datetime.datetime(2025, 1, 1)],
+                "horodating": [datetime.datetime(2025, 1, 1)],
+                "polygon SLC": [None],
+                "polygon GRD": [None],
+                "S3path SLC": [None],
+                "S3path GRD": [None],
+                "polarization": ["1SDV"],
+                "unit": ["S1A"],
+            },
+            schema=SCHEMA,
+        )
         metadata = {
             "train_ds": {"category": "train"},
             "val_ds": {"category": "val"},
@@ -335,30 +384,33 @@ class TestComputeCategoryAndConflicts:
         assert result["category"][0] == "val"
 
     def test_category_priority_undefined(self, updater, tmp_path):
-        df = pl.DataFrame({
-            "SAFE SLC": ["SLC1"],
-            "SAFE GRD": [None],
-            "SAFE OCN": [None],
-            "PATH SLC": [None],
-            "PATH GRD": [None],
-            "PATH OCN": [None],
-            "PATH L1B XSP A21": [None],
-            "PATH L1C XSP B17": [None],
-            "datasets": [["undefined_ds", "train_ds"]],
-            "category": [None],
-            "Hs WW3": [None],
-            "Tp WW3": [None],
-            "U10 ecmwf": [None],
-            "v10 ecmwf": [None],
-            "start date SAFE": [datetime.datetime(2025, 1, 1)],
-            "horodating": [datetime.datetime(2025, 1, 1)],
-            "polygon SLC": [None],
-            "polygon GRD": [None],
-            "S3path SLC": [None],
-            "S3path GRD": [None],
-            "polarization": ["1SDV"],
-            "unit": ["S1A"],
-        }, schema=SCHEMA)
+        df = pl.DataFrame(
+            {
+                "SAFE SLC": ["SLC1"],
+                "SAFE GRD": [None],
+                "SAFE OCN": [None],
+                "PATH SLC": [None],
+                "PATH GRD": [None],
+                "PATH OCN": [None],
+                "PATH L1B XSP A21": [None],
+                "PATH L1C XSP B17": [None],
+                "datasets": [["undefined_ds", "train_ds"]],
+                "category": [None],
+                "Hs WW3": [None],
+                "Tp WW3": [None],
+                "U10 ecmwf": [None],
+                "v10 ecmwf": [None],
+                "start date SAFE": [datetime.datetime(2025, 1, 1)],
+                "horodating": [datetime.datetime(2025, 1, 1)],
+                "polygon SLC": [None],
+                "polygon GRD": [None],
+                "S3path SLC": [None],
+                "S3path GRD": [None],
+                "polarization": ["1SDV"],
+                "unit": ["S1A"],
+            },
+            schema=SCHEMA,
+        )
         metadata = {
             "undefined_ds": {},
             "train_ds": {"category": "train"},
@@ -371,54 +423,72 @@ class TestMergeCatalogues:
     """Tests for merge_catalogues."""
 
     def test_merge_two_simple(self, tmp_path, updater):
-        df1 = pl.DataFrame({
-            "SAFE SLC": ["SLC1", "SLC2"],
-            "SAFE GRD": [None, None],
-            "SAFE OCN": [None, None],
-            "PATH SLC": ["/path1", "/path2"],
-            "PATH GRD": [None, None],
-            "PATH OCN": [None, None],
-            "PATH L1B XSP A21": [None, None],
-            "PATH L1C XSP B17": [None, None],
-            "datasets": [["ds1"], ["ds2"]],
-            "category": ["train", "val"],
-            "Hs WW3": [None, None],
-            "Tp WW3": [None, None],
-            "U10 ecmwf": [None, None],
-            "v10 ecmwf": [None, None],
-            "start date SAFE": [datetime.datetime(2025, 1, 1), datetime.datetime(2025, 1, 2)],
-            "horodating": [datetime.datetime(2025, 1, 1), datetime.datetime(2025, 1, 2)],
-            "polygon SLC": [None, None],
-            "polygon GRD": [None, None],
-            "S3path SLC": [None, None],
-            "S3path GRD": [None, None],
-            "polarization": ["1SDV", "1SDV"],
-            "unit": ["S1A", "S1B"],
-        }, schema=SCHEMA)
-        df2 = pl.DataFrame({
-            "SAFE SLC": ["SLC2", "SLC3"],
-            "SAFE GRD": [None, None],
-            "SAFE OCN": [None, None],
-            "PATH SLC": ["/path2_alt", "/path3"],
-            "PATH GRD": [None, None],
-            "PATH OCN": [None, None],
-            "PATH L1B XSP A21": [None, None],
-            "PATH L1C XSP B17": [None, None],
-            "datasets": [["ds2_new"], ["ds3"]],
-            "category": ["test", "train"],
-            "Hs WW3": [None, None],
-            "Tp WW3": [None, None],
-            "U10 ecmwf": [None, None],
-            "v10 ecmwf": [None, None],
-            "start date SAFE": [datetime.datetime(2025, 1, 2), datetime.datetime(2025, 1, 3)],
-            "horodating": [datetime.datetime(2025, 1, 3), datetime.datetime(2025, 1, 3)],
-            "polygon SLC": [None, None],
-            "polygon GRD": [None, None],
-            "S3path SLC": [None, None],
-            "S3path GRD": [None, None],
-            "polarization": ["1SDV", "1SDV"],
-            "unit": ["S1B", "S1C"],
-        }, schema=SCHEMA)
+        df1 = pl.DataFrame(
+            {
+                "SAFE SLC": ["SLC1", "SLC2"],
+                "SAFE GRD": [None, None],
+                "SAFE OCN": [None, None],
+                "PATH SLC": ["/path1", "/path2"],
+                "PATH GRD": [None, None],
+                "PATH OCN": [None, None],
+                "PATH L1B XSP A21": [None, None],
+                "PATH L1C XSP B17": [None, None],
+                "datasets": [["ds1"], ["ds2"]],
+                "category": ["train", "val"],
+                "Hs WW3": [None, None],
+                "Tp WW3": [None, None],
+                "U10 ecmwf": [None, None],
+                "v10 ecmwf": [None, None],
+                "start date SAFE": [
+                    datetime.datetime(2025, 1, 1),
+                    datetime.datetime(2025, 1, 2),
+                ],
+                "horodating": [
+                    datetime.datetime(2025, 1, 1),
+                    datetime.datetime(2025, 1, 2),
+                ],
+                "polygon SLC": [None, None],
+                "polygon GRD": [None, None],
+                "S3path SLC": [None, None],
+                "S3path GRD": [None, None],
+                "polarization": ["1SDV", "1SDV"],
+                "unit": ["S1A", "S1B"],
+            },
+            schema=SCHEMA,
+        )
+        df2 = pl.DataFrame(
+            {
+                "SAFE SLC": ["SLC2", "SLC3"],
+                "SAFE GRD": [None, None],
+                "SAFE OCN": [None, None],
+                "PATH SLC": ["/path2_alt", "/path3"],
+                "PATH GRD": [None, None],
+                "PATH OCN": [None, None],
+                "PATH L1B XSP A21": [None, None],
+                "PATH L1C XSP B17": [None, None],
+                "datasets": [["ds2_new"], ["ds3"]],
+                "category": ["test", "train"],
+                "Hs WW3": [None, None],
+                "Tp WW3": [None, None],
+                "U10 ecmwf": [None, None],
+                "v10 ecmwf": [None, None],
+                "start date SAFE": [
+                    datetime.datetime(2025, 1, 2),
+                    datetime.datetime(2025, 1, 3),
+                ],
+                "horodating": [
+                    datetime.datetime(2025, 1, 3),
+                    datetime.datetime(2025, 1, 3),
+                ],
+                "polygon SLC": [None, None],
+                "polygon GRD": [None, None],
+                "S3path SLC": [None, None],
+                "S3path GRD": [None, None],
+                "polarization": ["1SDV", "1SDV"],
+                "unit": ["S1B", "S1C"],
+            },
+            schema=SCHEMA,
+        )
         path1 = tmp_path / "cat1.parquet"
         path2 = tmp_path / "cat2.parquet"
         df1.write_parquet(path1)
@@ -442,60 +512,66 @@ class TestUpdatePresenceColumns:
     @patch("s1ifr.get_path_from_base_safe.get_path_from_base_safe")
     def test_update_presence_columns_found(self, mock_get_path, updater):
         mock_get_path.return_value = "/found/path"
-        df = pl.DataFrame({
-            "SAFE SLC": ["SLC1"],
-            "SAFE GRD": [None],
-            "SAFE OCN": [None],
-            "PATH SLC": [None],
-            "PATH GRD": [None],
-            "PATH OCN": [None],
-            "PATH L1B XSP A21": [None],
-            "PATH L1C XSP B17": [None],
-            "datasets": [[]],
-            "category": [None],
-            "Hs WW3": [None],
-            "Tp WW3": [None],
-            "U10 ecmwf": [None],
-            "v10 ecmwf": [None],
-            "start date SAFE": [datetime.datetime(2025, 1, 1)],
-            "horodating": [datetime.datetime(2025, 1, 1)],
-            "polygon SLC": [None],
-            "polygon GRD": [None],
-            "S3path SLC": [None],
-            "S3path GRD": [None],
-            "polarization": ["1SDV"],
-            "unit": ["S1A"],
-        }, schema=SCHEMA)
+        df = pl.DataFrame(
+            {
+                "SAFE SLC": ["SLC1"],
+                "SAFE GRD": [None],
+                "SAFE OCN": [None],
+                "PATH SLC": [None],
+                "PATH GRD": [None],
+                "PATH OCN": [None],
+                "PATH L1B XSP A21": [None],
+                "PATH L1C XSP B17": [None],
+                "datasets": [[]],
+                "category": [None],
+                "Hs WW3": [None],
+                "Tp WW3": [None],
+                "U10 ecmwf": [None],
+                "v10 ecmwf": [None],
+                "start date SAFE": [datetime.datetime(2025, 1, 1)],
+                "horodating": [datetime.datetime(2025, 1, 1)],
+                "polygon SLC": [None],
+                "polygon GRD": [None],
+                "S3path SLC": [None],
+                "S3path GRD": [None],
+                "polarization": ["1SDV"],
+                "unit": ["S1A"],
+            },
+            schema=SCHEMA,
+        )
         result = updater._update_presence_columns(df)
         assert result["PATH SLC"][0] == "/found/path"
 
     @patch("s1ifr.get_path_from_base_safe.get_path_from_base_safe")
     def test_update_presence_columns_not_found(self, mock_get_path, updater):
         mock_get_path.return_value = None
-        df = pl.DataFrame({
-            "SAFE SLC": ["SLC1"],
-            "SAFE GRD": [None],
-            "SAFE OCN": [None],
-            "PATH SLC": [None],
-            "PATH GRD": [None],
-            "PATH OCN": [None],
-            "PATH L1B XSP A21": [None],
-            "PATH L1C XSP B17": [None],
-            "datasets": [[]],
-            "category": [None],
-            "Hs WW3": [None],
-            "Tp WW3": [None],
-            "U10 ecmwf": [None],
-            "v10 ecmwf": [None],
-            "start date SAFE": [datetime.datetime(2025, 1, 1)],
-            "horodating": [datetime.datetime(2025, 1, 1)],
-            "polygon SLC": [None],
-            "polygon GRD": [None],
-            "S3path SLC": [None],
-            "S3path GRD": [None],
-            "polarization": ["1SDV"],
-            "unit": ["S1A"],
-        }, schema=SCHEMA)
+        df = pl.DataFrame(
+            {
+                "SAFE SLC": ["SLC1"],
+                "SAFE GRD": [None],
+                "SAFE OCN": [None],
+                "PATH SLC": [None],
+                "PATH GRD": [None],
+                "PATH OCN": [None],
+                "PATH L1B XSP A21": [None],
+                "PATH L1C XSP B17": [None],
+                "datasets": [[]],
+                "category": [None],
+                "Hs WW3": [None],
+                "Tp WW3": [None],
+                "U10 ecmwf": [None],
+                "v10 ecmwf": [None],
+                "start date SAFE": [datetime.datetime(2025, 1, 1)],
+                "horodating": [datetime.datetime(2025, 1, 1)],
+                "polygon SLC": [None],
+                "polygon GRD": [None],
+                "S3path SLC": [None],
+                "S3path GRD": [None],
+                "polarization": ["1SDV"],
+                "unit": ["S1A"],
+            },
+            schema=SCHEMA,
+        )
         result = updater._update_presence_columns(df)
         assert result["PATH SLC"][0] is None
 
@@ -506,36 +582,42 @@ class TestUpdateDerivedProducts:
     @patch("s1ifr.paths_safe_product_family.get_products_family")
     def test_update_derived_products(self, mock_get_family, updater):
         import pandas as pd
-        mock_df = pd.DataFrame({
-            "L1_SLC": ["SLC1"],
-            "L1B_XSP_A21": ["/path/to/a21"],
-        })
+
+        mock_df = pd.DataFrame(
+            {
+                "L1_SLC": ["SLC1"],
+                "L1B_XSP_A21": ["/path/to/a21"],
+            }
+        )
         mock_get_family.return_value = mock_df
 
-        df = pl.DataFrame({
-            "SAFE SLC": ["SLC1"],
-            "SAFE GRD": [None],
-            "SAFE OCN": [None],
-            "PATH SLC": [None],
-            "PATH GRD": [None],
-            "PATH OCN": [None],
-            "PATH L1B XSP A21": [None],
-            "PATH L1C XSP B17": [None],
-            "datasets": [[]],
-            "category": [None],
-            "Hs WW3": [None],
-            "Tp WW3": [None],
-            "U10 ecmwf": [None],
-            "v10 ecmwf": [None],
-            "start date SAFE": [datetime.datetime(2025, 1, 1)],
-            "horodating": [datetime.datetime(2025, 1, 1)],
-            "polygon SLC": [None],
-            "polygon GRD": [None],
-            "S3path SLC": [None],
-            "S3path GRD": [None],
-            "polarization": ["1SDV"],
-            "unit": ["S1A"],
-        }, schema=SCHEMA)
+        df = pl.DataFrame(
+            {
+                "SAFE SLC": ["SLC1"],
+                "SAFE GRD": [None],
+                "SAFE OCN": [None],
+                "PATH SLC": [None],
+                "PATH GRD": [None],
+                "PATH OCN": [None],
+                "PATH L1B XSP A21": [None],
+                "PATH L1C XSP B17": [None],
+                "datasets": [[]],
+                "category": [None],
+                "Hs WW3": [None],
+                "Tp WW3": [None],
+                "U10 ecmwf": [None],
+                "v10 ecmwf": [None],
+                "start date SAFE": [datetime.datetime(2025, 1, 1)],
+                "horodating": [datetime.datetime(2025, 1, 1)],
+                "polygon SLC": [None],
+                "polygon GRD": [None],
+                "S3path SLC": [None],
+                "S3path GRD": [None],
+                "polarization": ["1SDV"],
+                "unit": ["S1A"],
+            },
+            schema=SCHEMA,
+        )
         result = updater._update_derived_products(df)
         assert result["PATH L1B XSP A21"][0] == "/path/to/a21"
 
@@ -546,60 +628,66 @@ class TestLinkOcnToGrd:
     @patch.object(CatalogueUpdater, "_call_cdse_get_ocn_from_grd")
     def test_link_ocn_to_grd_found(self, mock_ocn, updater):
         mock_ocn.return_value = "OCN1"
-        df = pl.DataFrame({
-            "SAFE SLC": [None],
-            "SAFE GRD": ["GRD1"],
-            "SAFE OCN": [None],
-            "PATH SLC": [None],
-            "PATH GRD": [None],
-            "PATH OCN": [None],
-            "PATH L1B XSP A21": [None],
-            "PATH L1C XSP B17": [None],
-            "datasets": [[]],
-            "category": [None],
-            "Hs WW3": [None],
-            "Tp WW3": [None],
-            "U10 ecmwf": [None],
-            "v10 ecmwf": [None],
-            "start date SAFE": [datetime.datetime(2025, 1, 1)],
-            "horodating": [datetime.datetime(2025, 1, 1)],
-            "polygon SLC": [None],
-            "polygon GRD": [None],
-            "S3path SLC": [None],
-            "S3path GRD": [None],
-            "polarization": ["1SDV"],
-            "unit": ["S1A"],
-        }, schema=SCHEMA)
+        df = pl.DataFrame(
+            {
+                "SAFE SLC": [None],
+                "SAFE GRD": ["GRD1"],
+                "SAFE OCN": [None],
+                "PATH SLC": [None],
+                "PATH GRD": [None],
+                "PATH OCN": [None],
+                "PATH L1B XSP A21": [None],
+                "PATH L1C XSP B17": [None],
+                "datasets": [[]],
+                "category": [None],
+                "Hs WW3": [None],
+                "Tp WW3": [None],
+                "U10 ecmwf": [None],
+                "v10 ecmwf": [None],
+                "start date SAFE": [datetime.datetime(2025, 1, 1)],
+                "horodating": [datetime.datetime(2025, 1, 1)],
+                "polygon SLC": [None],
+                "polygon GRD": [None],
+                "S3path SLC": [None],
+                "S3path GRD": [None],
+                "polarization": ["1SDV"],
+                "unit": ["S1A"],
+            },
+            schema=SCHEMA,
+        )
         result = updater._link_ocn_to_grd(df)
         assert result["SAFE OCN"][0] == "OCN1"
 
     @patch.object(CatalogueUpdater, "_call_cdse_get_ocn_from_grd")
     def test_link_ocn_to_grd_not_found_marked(self, mock_ocn, updater):
         mock_ocn.return_value = None
-        df = pl.DataFrame({
-            "SAFE SLC": [None],
-            "SAFE GRD": ["GRD1"],
-            "SAFE OCN": [None],
-            "PATH SLC": [None],
-            "PATH GRD": [None],
-            "PATH OCN": [None],
-            "PATH L1B XSP A21": [None],
-            "PATH L1C XSP B17": [None],
-            "datasets": [[]],
-            "category": [None],
-            "Hs WW3": [None],
-            "Tp WW3": [None],
-            "U10 ecmwf": [None],
-            "v10 ecmwf": [None],
-            "start date SAFE": [datetime.datetime(2025, 1, 1)],
-            "horodating": [datetime.datetime(2025, 1, 1)],
-            "polygon SLC": [None],
-            "polygon GRD": [None],
-            "S3path SLC": [None],
-            "S3path GRD": [None],
-            "polarization": ["1SDV"],
-            "unit": ["S1A"],
-        }, schema=SCHEMA)
+        df = pl.DataFrame(
+            {
+                "SAFE SLC": [None],
+                "SAFE GRD": ["GRD1"],
+                "SAFE OCN": [None],
+                "PATH SLC": [None],
+                "PATH GRD": [None],
+                "PATH OCN": [None],
+                "PATH L1B XSP A21": [None],
+                "PATH L1C XSP B17": [None],
+                "datasets": [[]],
+                "category": [None],
+                "Hs WW3": [None],
+                "Tp WW3": [None],
+                "U10 ecmwf": [None],
+                "v10 ecmwf": [None],
+                "start date SAFE": [datetime.datetime(2025, 1, 1)],
+                "horodating": [datetime.datetime(2025, 1, 1)],
+                "polygon SLC": [None],
+                "polygon GRD": [None],
+                "S3path SLC": [None],
+                "S3path GRD": [None],
+                "polarization": ["1SDV"],
+                "unit": ["S1A"],
+            },
+            schema=SCHEMA,
+        )
         result = updater._link_ocn_to_grd(df)
         assert result["SAFE OCN"][0] == "NOT_FOUND"
         # assert result["SAFE OCN"][0] is None

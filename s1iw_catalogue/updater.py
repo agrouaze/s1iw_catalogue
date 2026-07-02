@@ -1,23 +1,24 @@
 """Incremental update logic for the catalogue."""
 
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple, Union
 
+import contextlib
 import datetime
+import hashlib
 import logging
-import re
 import os
+import re
 import time
 from collections import defaultdict
 from pathlib import Path
-import hashlib
-from typing import Optional, List, Union, Dict, Any
-import polars as pl
+
 import pandas as pd
-import contextlib
-from s1iw_catalogue.ww3_extractor import add_ww3_to_catalogue
-from s1iw_catalogue.schema import SCHEMA
-from s1iw_catalogue.schema import WW3_COLUMNS
+import polars as pl
+
 from s1iw_catalogue.config import load_config
+from s1iw_catalogue.schema import SCHEMA, WW3_COLUMNS
+from s1iw_catalogue.ww3_extractor import add_ww3_to_catalogue
+
 # Set up module-level logger
 logger = logging.getLogger(__name__)
 
@@ -27,12 +28,12 @@ class CatalogueUpdater:
 
     def __init__(
         self,
-        config: Union[str, Path, Dict[str, Any], None] = None,
-        config_path: Union[str, Path, None] = None,
+        config: str | Path | dict[str, Any] | None = None,
+        config_path: str | Path | None = None,
     ):
         """
         Initialize the updater with configuration.
-        
+
         Args:
             config: Configuration dictionary or path to config file
             config_path: Path to configuration file (alternative to config)
@@ -52,7 +53,7 @@ class CatalogueUpdater:
             self._config = config
         else:
             self._config = load_config() if config is None else config
-        
+
         # For backward compatibility
         self.config_path = str(self._config_path) if self._config_path else None
 
@@ -97,135 +98,134 @@ class CatalogueUpdater:
             "start_date": start_date,
             "end_date": end_date,
         }
-    
 
-        
-    def update_with_ww3(self, 
-                        catalogue_df,
-                        n_jobs: int = 6,
-                        force_update: bool = False,
-                        verbose: bool = True) -> Union[pd.DataFrame, pl.DataFrame]:
+    def update_with_ww3(
+        self,
+        catalogue_df,
+        n_jobs: int = 6,
+        force_update: bool = False,
+        verbose: bool = True,
+    ) -> pd.DataFrame | pl.DataFrame:
         """
         Update catalogue with WW3 wave data.
-        
+
         Strategy:
         - null values = not yet extracted -> EXTRACT
         - NaN values = extracted but on land/invalid -> SKIP (keep NaN)
-        
+
         Args:
             catalogue_df: Pandas or Polars catalogue DataFrame
             n_jobs: Number of parallel workers
             force_update: If True, recalculate even if values exist
             verbose: If True, log progress information
-            
+
         Returns:
             Updated DataFrame (same type as input)
         """
         is_polars = isinstance(catalogue_df, pl.DataFrame)
-        
+
         # Standardiser vers Polars pour le traitement (plus facile pour gérer null vs NaN)
         if is_polars:
             df = catalogue_df.clone()
         else:
             df = pl.from_pandas(catalogue_df)
-        
+
         # 1. S'assurer que les colonnes WW3 existent (créées en null par défaut)
         for col in WW3_COLUMNS:
             if col not in df.columns:
                 df = df.with_columns(pl.lit(None, dtype=pl.Float32).alias(col))
-        
+
         # 2. Construire le masque des lignes qui nécessitent UNE extraction
         if force_update:
             mask = pl.lit(True)
         else:
-            # is_null() cible UNIQUEMENT les valeurs nulles (vides), 
+            # is_null() cible UNIQUEMENT les valeurs nulles (vides),
             # il ignore les NaN (qui signifient "sur terre / invalide")
             mask = pl.col(WW3_COLUMNS[0]).is_null()
             for col in WW3_COLUMNS[1:]:
                 mask = mask | pl.col(col).is_null()
-        
+
         missing_df = df.filter(mask)
         missing_count = missing_df.height
-        
+
         if missing_count == 0:
             if verbose:
-                logger.info("✅ All products already have WW3 data (null values filled, NaN preserved).")
+                logger.info(
+                    "✅ All products already have WW3 data (null values filled, NaN preserved)."
+                )
             return catalogue_df if is_polars else df.to_pandas()
-        
+
         if verbose:
-            logger.info(f"🌊 Found {missing_count} products with empty WW3 cells (null). Extracting...")
-        
+            logger.info(
+                f"🌊 Found {missing_count} products with empty WW3 cells (null). Extracting..."
+            )
+
         # 3. Lancer l'extraction UNIQUEMENT sur le sous-ensemble manquant
         # add_ww3_to_catalogue retourne un DataFrame avec les mêmes lignes + les colonnes remplies
         extracted_df = add_ww3_to_catalogue(
-            missing_df,
-            config_path=self.config_path,
-            n_jobs=n_jobs,
-            verbose=verbose
+            missing_df, config_path=self.config_path, n_jobs=n_jobs, verbose=verbose
         )
-        
+
         # 4. Fusionner les résultats de façon très performante (sans boucle for)
         # On utilise un index de ligne pour faire un join propre
         df_with_idx = df.with_row_index("_ww3_idx")
         extracted_with_idx = extracted_df.with_row_index("_ww3_idx")
-        
+
         # On ne garde que l'index et les nouvelles colonnes extraites
         update_cols = ["_ww3_idx"] + WW3_COLUMNS
         updates = extracted_with_idx.select(update_cols)
-        
+
         # Jointure
         merged = df_with_idx.join(updates, on="_ww3_idx", how="left", suffix="_new")
-        
+
         # Utiliser coalesce pour écraser les 'null' par les nouvelles valeurs,
         # tout en préservant les 'NaN' qui n'ont pas été ré-extraites
         final_exprs = []
         for col in merged.columns:
             if col in WW3_COLUMNS:
                 # Prend la nouvelle valeur si elle existe, sinon garde l'ancienne
-                final_exprs.append(pl.coalesce([pl.col(f"{col}_new"), pl.col(col)]).alias(col))
+                final_exprs.append(
+                    pl.coalesce([pl.col(f"{col}_new"), pl.col(col)]).alias(col)
+                )
             elif col.endswith("_new"):
                 # Ignorer les colonnes _new résiduelles
                 continue
             else:
                 final_exprs.append(pl.col(col))
-                
+
         result_df = merged.select(final_exprs).drop("_ww3_idx")
-        
+
         if verbose:
             still_null = result_df.filter(pl.col(WW3_COLUMNS[0]).is_null()).height
-            logger.info(f"✅ WW3 extraction complete. {missing_count - still_null}/{missing_count} successfully extracted.")
-        
+            logger.info(
+                f"✅ WW3 extraction complete. {missing_count - still_null}/{missing_count} successfully extracted."
+            )
+
         # Retourner le même type qu'en entrée
         if is_polars:
             return result_df
         else:
             return result_df.to_pandas()
-    
-    def update_batch(self, 
-                     catalogue_df,
-                     sources: List[str] = None,
-                     n_jobs: int = 6,
-                     **kwargs) -> Union[pd.DataFrame, pl.DataFrame]:
+
+    def update_batch(
+        self, catalogue_df, sources: list[str] = None, n_jobs: int = 6, **kwargs
+    ) -> pd.DataFrame | pl.DataFrame:
         """
         Update catalogue with multiple data sources.
         """
         if sources is None:
-            sources = ['ww3']
-        
+            sources = ["ww3"]
+
         result_df = catalogue_df
-        
+
         for source in sources:
             logger.info(f"Updating with {source.upper()} data...")
-            
-            if source == 'ww3':
-                result_df = self.update_with_ww3(
-                    result_df, 
-                    n_jobs=n_jobs,
-                    **kwargs
-                )
-            
+
+            if source == "ww3":
+                result_df = self.update_with_ww3(result_df, n_jobs=n_jobs, **kwargs)
+
             logger.info(f"Finished {source.upper()} update")
-        
+
         return result_df
 
     def _read_one_listing(self, path: Path) -> pl.DataFrame:
@@ -369,9 +369,7 @@ class CatalogueUpdater:
                 df_raw = self.read_listings(path)
                 if df_raw.height > 0:
                     df_raw = df_raw.with_columns(
-                        pl.lit([name], dtype=pl.List(pl.Utf8)).alias(
-                            "datasets"
-                        )
+                        pl.lit([name], dtype=pl.List(pl.Utf8)).alias("datasets")
                     )
                     slc_dfs.append(df_raw)
                 else:
@@ -427,9 +425,7 @@ class CatalogueUpdater:
                 df_raw = self.read_listings(path)
                 if df_raw.height > 0:
                     df_raw = df_raw.with_columns(
-                        pl.lit([name], dtype=pl.List(pl.Utf8)).alias(
-                            "datasets"
-                        )
+                        pl.lit([name], dtype=pl.List(pl.Utf8)).alias("datasets")
                     )
                     grd_dfs.append(df_raw)
                 else:
@@ -504,7 +500,7 @@ class CatalogueUpdater:
         logger.info("🚀 Starting SLC-GRD-OCN linking pipeline...")
         logger.info("=" * 60)
         start_total = time.time()
-        
+
         # Step 1: Local SLC-GRD matching
         logger.info("\n📍 Step 1/8: Local SLC-GRD matching...")
         start = time.time()
@@ -512,7 +508,7 @@ class CatalogueUpdater:
         elapsed = time.time() - start
         self._log_catalogue_summary(df, "After local matching")
         logger.info(f"✅ Step 1/8 completed in {elapsed:.1f}s")
-        
+
         # Step 2: CDSE fallback for SLC-GRD orphans
         logger.info("\n📍 Step 2/8: CDSE fallback for SLC-GRD orphans...")
         start = time.time()
@@ -521,7 +517,7 @@ class CatalogueUpdater:
         elapsed = time.time() - start
         self._log_catalogue_summary(df, "After CDSE fallback")
         logger.info(f"✅ Step 2/8 completed in {elapsed:.1f}s")
-        
+
         # Step 3: Link OCN to GRD (primary)
         logger.info("\n📍 Step 3/8: Linking OCN to GRD products...")
         start = time.time()
@@ -529,7 +525,7 @@ class CatalogueUpdater:
         elapsed = time.time() - start
         self._log_catalogue_summary(df, "After OCN-GRD linking")
         logger.info(f"✅ Step 3/8 completed in {elapsed:.1f}s")
-        
+
         # Step 4: Fallback - Link OCN to SLC
         logger.info("\n📍 Step 4/8: Fallback - Linking OCN to SLC...")
         start = time.time()
@@ -537,7 +533,7 @@ class CatalogueUpdater:
         elapsed = time.time() - start
         self._log_catalogue_summary(df, "After OCN-SLC fallback")
         logger.info(f"✅ Step 4/8 completed in {elapsed:.1f}s")
-        
+
         # Step 5: Fetch polygons and S3 paths from CDSE
         logger.info("\n📍 Step 5/8: Fetching polygons and S3 paths from CDSE...")
         start = time.time()
@@ -545,7 +541,7 @@ class CatalogueUpdater:
         elapsed = time.time() - start
         self._log_catalogue_summary(df, "After polygon fetch")
         logger.info(f"✅ Step 5/8 completed in {elapsed:.1f}s")
-        
+
         # Step 6: Check presence on Ifremer storage (including OCN)
         logger.info("\n📍 Step 6/8: Checking presence on Ifremer storage...")
         start = time.time()
@@ -553,7 +549,7 @@ class CatalogueUpdater:
         elapsed = time.time() - start
         self._log_catalogue_summary(df, "After presence check")
         logger.info(f"✅ Step 6/8 completed in {elapsed:.1f}s")
-        
+
         # Step 7: Check derived products (L1B, L1C, L2WAV)
         logger.info("\n📍 Step 7/8: Checking derived products (L1B, L1C, L2WAV)...")
         start = time.time()
@@ -561,30 +557,27 @@ class CatalogueUpdater:
         elapsed = time.time() - start
         self._log_catalogue_summary(df, "After derived products")
         logger.info(f"✅ Step 7/8 completed in {elapsed:.1f}s")
-        
+
         # Step 8: Add WW3 wave data
         logger.info("\n📍 Step 8/8: Adding WW3 wave data...")
         start = time.time()
         df = self.update_with_ww3(
-            df, 
-            n_jobs=6, 
-            force_update=False, 
+            df,
+            n_jobs=6,
+            force_update=False,
             verbose=True,
         )
         elapsed = time.time() - start
         self._log_catalogue_summary(df, "After WW3 extraction")
         logger.info(f"✅ Step 8/8 completed in {elapsed:.1f}s")
-        
+
         total_elapsed = time.time() - start_total
         logger.info("=" * 60)
         logger.info(f"🏁 SLC-GRD-OCN linking complete in {total_elapsed:.1f}s")
         logger.info(f"📊 Final catalogue shape: {df.shape}")
         logger.info("=" * 60)
-        
+
         return df
-
-
-
 
     def _batch_cdse_match(
         self,
@@ -604,17 +597,24 @@ class CatalogueUpdater:
             if checkpoint_dir is None:
                 # If checkpoint dir creation fails, use a temp directory
                 import tempfile
+
                 checkpoint_dir = Path(tempfile.mkdtemp())
-                logger.warning(f"Using temporary checkpoint directory: {checkpoint_dir}")
+                logger.warning(
+                    f"Using temporary checkpoint directory: {checkpoint_dir}"
+                )
 
         if output_file is None:
             # Deterministic filename based on sorted IDs and target type
             sorted_ids = sorted(source_ids)
-            hash_obj = hashlib.md5(''.join(sorted_ids).encode())
+            hash_obj = hashlib.md5("".join(sorted_ids).encode())
             hash_hex = hash_obj.hexdigest()[:8]
             output_file = f"batch_{target_type}_{hash_hex}.txt"
             # Place it in the checkpoint directory
-            output_file = str(Path(checkpoint_dir) / output_file) if checkpoint_dir else output_file
+            output_file = (
+                str(Path(checkpoint_dir) / output_file)
+                if checkpoint_dir
+                else output_file
+            )
 
         results = entrypoint(
             safe_list=source_ids,
@@ -637,7 +637,6 @@ class CatalogueUpdater:
                 pass
 
         return mapping
-
 
     def _local_link_slc_grd(self, df: pl.DataFrame) -> pl.DataFrame | None:
         """
@@ -928,7 +927,9 @@ class CatalogueUpdater:
             grd_ids = [row["SAFE GRD"] for row in grd_orphans.to_dicts()]
             logger.info(f"Batch matching {len(grd_ids)} GRD orphans to SLC...")
             mapping_grd_to_slc = self._batch_cdse_match(grd_ids, "SLC_")
-            logger.info(f"Found SLC for {len(mapping_grd_to_slc)}/{len(grd_ids)} GRD orphans")
+            logger.info(
+                f"Found SLC for {len(mapping_grd_to_slc)}/{len(grd_ids)} GRD orphans"
+            )
             for grd_name, slc_name in mapping_grd_to_slc.items():
                 df = df.with_columns(
                     pl.when(pl.col("SAFE GRD") == grd_name)
@@ -949,7 +950,9 @@ class CatalogueUpdater:
             already_linked = set(mapping_grd_to_slc.values())
             slc_ids_to_match = [s for s in slc_ids if s not in already_linked]
             if slc_ids_to_match:
-                logger.info(f"Batch matching {len(slc_ids_to_match)} SLC orphans to GRD...")
+                logger.info(
+                    f"Batch matching {len(slc_ids_to_match)} SLC orphans to GRD..."
+                )
                 mapping_slc_to_grd = self._batch_cdse_match(slc_ids_to_match, "GRDH")
                 logger.info(
                     f"Found GRD for {len(mapping_slc_to_grd)}/{len(slc_ids_to_match)} SLC orphans"
@@ -1045,7 +1048,6 @@ class CatalogueUpdater:
         except Exception as e:
             logger.error(f"CDSE query failed for {slc_name}: {e}")
             return None
-        
 
     def _get_category_priority(self, category: str) -> int:
         """Return priority (higher = more important) for category."""
@@ -1096,13 +1098,19 @@ class CatalogueUpdater:
 
                 # Log conflict if more than one distinct category
                 if len(cat_set) > 1:
-                    safe_name = row.get("SAFE SLC") or row.get("SAFE GRD") or row.get("SAFE OCN")
-                    conflicts.append({
-                        "safe": safe_name,
-                        "datasets": datasets,
-                        "categories": list(cat_set),
-                        "chosen": best_cat,
-                    })
+                    safe_name = (
+                        row.get("SAFE SLC")
+                        or row.get("SAFE GRD")
+                        or row.get("SAFE OCN")
+                    )
+                    conflicts.append(
+                        {
+                            "safe": safe_name,
+                            "datasets": datasets,
+                            "categories": list(cat_set),
+                            "chosen": best_cat,
+                        }
+                    )
 
         # Add column
         df = df.with_columns(pl.Series(new_categories).alias("category"))
@@ -1172,13 +1180,13 @@ class CatalogueUpdater:
         """Extract a single category string from various possible formats."""
         if cat is None:
             return None
-        
+
         # Si c'est une liste, essayons de l'aplatir
         if isinstance(cat, list):
             # Si la liste a un seul élément et que c'est une liste, aplatir
             if len(cat) == 1 and isinstance(cat[0], list):
                 cat = cat[0]
-            
+
             # Si on a maintenant une liste de chaînes
             if isinstance(cat, list) and len(cat) > 0:
                 # Si c'est une chaîne, la retourner
@@ -1188,10 +1196,10 @@ class CatalogueUpdater:
                 if isinstance(cat[0], list):
                     return self._extract_category_value(cat[0])
             return None
-        
+
         if isinstance(cat, str) and cat:
             return cat
-        
+
         return None
 
     def _merge_linked_rows(self, df: pl.DataFrame) -> pl.DataFrame:
@@ -1219,10 +1227,9 @@ class CatalogueUpdater:
         logger.info(f"Keeping {unlinked_rows.height} unlinked rows unchanged.")
 
         rows = linked_rows.to_dicts()
-        
+
         # FIX #2: More robust category extraction
 
-        
         merged_rows = []
         # Group by (SAFE SLC, SAFE GRD) pair
         pairs: dict[tuple[str, str], list[dict[str, Any]]] = {}
@@ -1301,7 +1308,7 @@ class CatalogueUpdater:
                 cat = self._extract_category_value(r.get("category"))
                 if cat:
                     all_cats.append(cat)
-            
+
             if all_cats:
                 best_cat = max(all_cats, key=self._get_category_priority)
                 merged["category"] = best_cat
@@ -1512,7 +1519,7 @@ class CatalogueUpdater:
 
             try:
                 # Pass cache_dir to fetch_data if configured
-                with open(os.devnull, 'w') as devnull:
+                with open(os.devnull, "w") as devnull:
                     with contextlib.redirect_stdout(devnull):
                         result_df = fetch_data(
                             gdf=gdf,
@@ -1661,14 +1668,16 @@ class CatalogueUpdater:
     def _get_checkpoint_dir(self) -> Path | None:
         """Return a checkpoint directory path based on the catalogue output path."""
         # Fix: use self._config instead of self.config
-        catalogue_path = self._config.get("paths", {}).get("output", {}).get("catalogue")
+        catalogue_path = (
+            self._config.get("paths", {}).get("output", {}).get("catalogue")
+        )
         if not catalogue_path:
             return None
         base_dir = Path(catalogue_path).parent
         checkpoint_dir = base_dir / "checkpoints"
         checkpoint_dir.mkdir(parents=True, exist_ok=True)
         return checkpoint_dir
-    
+
     # ---------- Placeholders for future implementation ----------
     def _update_presence_columns(
         self, df: pl.DataFrame, force: bool = False
@@ -1712,7 +1721,6 @@ class CatalogueUpdater:
                                 for k in s1ifr_config["paths"][key].keys()
                             ):
 
-
                                 potential_archives.append(key)
                     archive_names = potential_archives
                     logger.info(f"Found archives in s1ifr config: {archive_names}")
@@ -1737,10 +1745,12 @@ class CatalogueUpdater:
             ocn_rows = df.filter(  # <-- ADDED
                 pl.col("SAFE OCN").is_not_null() & pl.col("PATH OCN").is_null()
             )
-        
-        logger.info(f"Checking presence for {slc_rows.height} SLC, {grd_rows.height} GRD, and {ocn_rows.height} OCN products.")
-        
-        def find_product_path(safe_name: str, product_type: str) -> Optional[str]:
+
+        logger.info(
+            f"Checking presence for {slc_rows.height} SLC, {grd_rows.height} GRD, and {ocn_rows.height} OCN products."
+        )
+
+        def find_product_path(safe_name: str, product_type: str) -> str | None:
             """Find product path by checking all archives sequentially."""
             for archive_name in archive_names:
                 try:
@@ -1772,13 +1782,13 @@ class CatalogueUpdater:
         for row in grd_rows.to_dicts():
             safe_name = row["SAFE GRD"]
             grd_presence[safe_name] = find_product_path(safe_name, "GRD")
-        
+
         # Check OCN products  # <-- ADDED
         ocn_presence = {}
         for row in ocn_rows.to_dicts():
             safe_name = row["SAFE OCN"]
             ocn_presence[safe_name] = find_product_path(safe_name, "OCN")
-        
+
         # Update SLC presence column
         df = df.with_columns(
             pl.when(
@@ -1814,42 +1824,53 @@ class CatalogueUpdater:
             .otherwise(pl.col("PATH GRD"))
             .alias("PATH GRD")
         )
-        
+
         # Update OCN presence column  # <-- ADDED
         df = df.with_columns(
             pl.when(
-                pl.col("SAFE OCN").is_not_null() & 
-                (pl.col("PATH OCN").is_null() | pl.lit(force))
+                pl.col("SAFE OCN").is_not_null()
+                & (pl.col("PATH OCN").is_null() | pl.lit(force))
             )
             .then(
-                pl.struct(["SAFE OCN"])
-                .map_elements(
-                    lambda x: ocn_presence.get(x["SAFE OCN"]) if x["SAFE OCN"] else None,
-                    return_dtype=pl.Utf8
+                pl.struct(["SAFE OCN"]).map_elements(
+                    lambda x: (
+                        ocn_presence.get(x["SAFE OCN"]) if x["SAFE OCN"] else None
+                    ),
+                    return_dtype=pl.Utf8,
                 )
             )
             .otherwise(pl.col("PATH OCN"))
             .alias("PATH OCN")
         )
-        
+
         # Count how many were found
-        found_slc = df.filter(pl.col("SAFE SLC").is_not_null() & pl.col("PATH SLC").is_not_null()).height
-        found_grd = df.filter(pl.col("SAFE GRD").is_not_null() & pl.col("PATH GRD").is_not_null()).height
-        found_ocn = df.filter(pl.col("SAFE OCN").is_not_null() & pl.col("PATH OCN").is_not_null()).height  # <-- ADDED
-        
+        found_slc = df.filter(
+            pl.col("SAFE SLC").is_not_null() & pl.col("PATH SLC").is_not_null()
+        ).height
+        found_grd = df.filter(
+            pl.col("SAFE GRD").is_not_null() & pl.col("PATH GRD").is_not_null()
+        ).height
+        found_ocn = df.filter(
+            pl.col("SAFE OCN").is_not_null() & pl.col("PATH OCN").is_not_null()
+        ).height  # <-- ADDED
+
         total_slc = df.filter(pl.col("SAFE SLC").is_not_null()).height
         total_grd = df.filter(pl.col("SAFE GRD").is_not_null()).height
         total_ocn = df.filter(pl.col("SAFE OCN").is_not_null()).height  # <-- ADDED
-        
+
         if total_slc > 0:
             logger.info(
                 f"Found {found_slc}/{total_slc} SLC products on Ifremer storage ({found_slc/total_slc*100:.1f}%)"
             )
         if total_grd > 0:
-            logger.info(f"Found {found_grd}/{total_grd} GRD products on Ifremer storage ({found_grd/total_grd*100:.1f}%)")
+            logger.info(
+                f"Found {found_grd}/{total_grd} GRD products on Ifremer storage ({found_grd/total_grd*100:.1f}%)"
+            )
         if total_ocn > 0:  # <-- ADDED
-            logger.info(f"Found {found_ocn}/{total_ocn} OCN products on Ifremer storage ({found_ocn/total_ocn*100:.1f}%)")
-        
+            logger.info(
+                f"Found {found_ocn}/{total_ocn} OCN products on Ifremer storage ({found_ocn/total_ocn*100:.1f}%)"
+            )
+
         return df
 
     def _update_derived_products(self, df: pl.DataFrame) -> pl.DataFrame:
@@ -1993,25 +2014,27 @@ class CatalogueUpdater:
         Uses the GRD footprint for spatial filtering when available.
         """
         logger.info("Linking OCN to GRD products...")
-        
+
         # Find GRD rows without OCN
         # Filtre : exclure les lignes où SAFE OCN == "NOT_FOUND"
         grd_without_ocn = df.filter(
-            pl.col("SAFE GRD").is_not_null() &
-            (pl.col("SAFE OCN").is_null() | (pl.col("SAFE OCN") != "NOT_FOUND"))
+            pl.col("SAFE GRD").is_not_null()
+            & (pl.col("SAFE OCN").is_null() | (pl.col("SAFE OCN") != "NOT_FOUND"))
         )
-        
+
         if grd_without_ocn.height == 0:
             logger.info("All GRD products already have OCN linked.")
             return df
-        
-        logger.info(f"Attempting to link OCN for {grd_without_ocn.height} GRD products...")
-        
+
+        logger.info(
+            f"Attempting to link OCN for {grd_without_ocn.height} GRD products..."
+        )
+
         updates = {}
         for row in grd_without_ocn.to_dicts():
             grd_name = row["SAFE GRD"]
             grd_polygon = row.get("polygon GRD")
-            
+
             try:
                 ocn_name = self._call_cdse_get_ocn_from_grd(grd_name, grd_polygon)
                 if ocn_name:
@@ -2028,7 +2051,7 @@ class CatalogueUpdater:
                     logger.warning(f"CDSE could not find OCN for GRD {grd_name}")
             except Exception as e:
                 logger.error(f"Error linking OCN for GRD {grd_name}: {e}")
-        
+
         # Apply updates (quand un OCN est trouvé)
         for grd_name, ocn_name in updates.items():
             df = df.with_columns(
@@ -2037,7 +2060,7 @@ class CatalogueUpdater:
                 .otherwise(pl.col("SAFE OCN"))
                 .alias("SAFE OCN")
             )
-        
+
         logger.info(f"Linked OCN to {len(updates)} GRD products.")
         return df
 
@@ -2046,39 +2069,41 @@ class CatalogueUpdater:
         Fallback: Link OCN to SLC products when GRD link failed.
         """
         logger.info("Fallback: Linking OCN to SLC products...")
-        
+
         # Find SLC rows without OCN (exclure "NOT_FOUND")
         slc_without_ocn = df.filter(
-            pl.col("SAFE SLC").is_not_null() &
-            pl.col("SAFE GRD").is_null() &
-            (pl.col("SAFE OCN").is_null() | (pl.col("SAFE OCN") != "NOT_FOUND"))
+            pl.col("SAFE SLC").is_not_null()
+            & pl.col("SAFE GRD").is_null()
+            & (pl.col("SAFE OCN").is_null() | (pl.col("SAFE OCN") != "NOT_FOUND"))
         )
-        
+
         if slc_without_ocn.height == 0:
             logger.info("No SLC products need OCN fallback linking.")
             return df
-        
-        logger.info(f"Attempting to link OCN for {slc_without_ocn.height} SLC products...")
-        
+
+        logger.info(
+            f"Attempting to link OCN for {slc_without_ocn.height} SLC products..."
+        )
+
         # Get list of SLCs that already have OCN via GRD
         linked_via_grd_names = set()
         for row in df.filter(
-            pl.col("SAFE GRD").is_not_null() & 
-            pl.col("SAFE OCN").is_not_null() &
-            (pl.col("SAFE OCN") != "NOT_FOUND")
+            pl.col("SAFE GRD").is_not_null()
+            & pl.col("SAFE OCN").is_not_null()
+            & (pl.col("SAFE OCN") != "NOT_FOUND")
         ).to_dicts():
             linked_via_grd_names.add(row.get("SAFE SLC"))
-        
+
         updates = {}
         for row in slc_without_ocn.to_dicts():
             slc_name = row["SAFE SLC"]
-            
+
             # Skip if this SLC already has a GRD with OCN
             if slc_name in linked_via_grd_names:
                 continue
-            
+
             slc_polygon = row.get("polygon SLC")
-            
+
             try:
                 ocn_name = self._call_cdse_get_ocn_from_slc(slc_name, slc_polygon)
                 if ocn_name:
@@ -2095,7 +2120,7 @@ class CatalogueUpdater:
                     logger.warning(f"CDSE could not find OCN for SLC {slc_name}")
             except Exception as e:
                 logger.error(f"Error linking OCN for SLC {slc_name}: {e}")
-        
+
         # Apply updates
         for slc_name, ocn_name in updates.items():
             df = df.with_columns(
@@ -2104,13 +2129,13 @@ class CatalogueUpdater:
                 .otherwise(pl.col("SAFE OCN"))
                 .alias("SAFE OCN")
             )
-        
+
         logger.info(f"Linked OCN to {len(updates)} SLC products.")
         return df
 
-    
-
-    def _call_cdse_get_ocn_from_grd(self, grd_name: str, polygon_wkt: Optional[str] = None) -> Optional[str]:
+    def _call_cdse_get_ocn_from_grd(
+        self, grd_name: str, polygon_wkt: str | None = None
+    ) -> str | None:
         """
         Query CDSE to find OCN for a given GRD.
         Uses polygon for spatial filtering if available.
@@ -2120,26 +2145,27 @@ class CatalogueUpdater:
         except ImportError:
             logger.warning("cdsodatacli not installed")
             return None
-        
+
         target_type = "OCN_"
         delta_dist = defaultdict(int)
-        
+
         try:
             result = find_product_for_safe(
                 source_id=grd_name,
                 target_type=target_type,
                 logger=logger,
-                delta_distribution=delta_dist
+                delta_distribution=delta_dist,
             )
             if result and "target_name" in result:
                 return result["target_name"]
         except Exception as e:
             logger.error(f"CDSE query failed for {grd_name}: {e}")
-        
+
         return None
 
-
-    def _call_cdse_get_ocn_from_slc(self, slc_name: str, polygon_wkt: Optional[str] = None) -> Optional[str]:
+    def _call_cdse_get_ocn_from_slc(
+        self, slc_name: str, polygon_wkt: str | None = None
+    ) -> str | None:
         """
         Query CDSE to find OCN for a given SLC.
         Uses polygon for spatial filtering if available.
@@ -2149,30 +2175,30 @@ class CatalogueUpdater:
         except ImportError:
             logger.warning("cdsodatacli not installed")
             return None
-        
+
         target_type = "OCN_"
         delta_dist = defaultdict(int)
-        
+
         try:
             result = find_product_for_safe(
                 source_id=slc_name,
                 target_type=target_type,
                 logger=logger,
-                delta_distribution=delta_dist
+                delta_distribution=delta_dist,
             )
             if result and "target_name" in result:
                 return result["target_name"]
         except Exception as e:
             logger.error(f"CDSE query failed for {slc_name}: {e}")
-        
+
         return None
-    
+
     def merge_catalogues(
         self,
         catalogue_paths: list[Path | str],
         output_path: Path | str,
         config_path: Path | str | None = None,
-        ) -> None:
+    ) -> None:
         """
         Merge multiple catalogues into a single Parquet file.
 
@@ -2180,8 +2206,9 @@ class CatalogueUpdater:
         - For duplicates, dataset lists are unioned, category is chosen by priority,
         horodating takes the most recent, and presence columns keep first non-null.
         """
-        import polars as pl
         from pathlib import Path
+
+        import polars as pl
 
         catalogue_paths = [Path(p) for p in catalogue_paths]
         output_path = Path(output_path)
@@ -2274,42 +2301,40 @@ class CatalogueUpdater:
         )
 
         # Group and aggregate
-        aggregated = combined.group_by("_safe_id").agg([
-            pl.col("SAFE SLC").first().alias("SAFE SLC"),
-            pl.col("SAFE GRD").first().alias("SAFE GRD"),
-            pl.col("SAFE OCN").first().alias("SAFE OCN"),
-            # Use list.explode() instead of deprecated flatten()
-            pl.col("datasets")
-            .list.explode()
-            .unique()
-            .alias("datasets"),
-            # Collect categories for each group
-            pl.col("category").alias("_categories"),
-            pl.col("PATH SLC").first().alias("PATH SLC"),
-            pl.col("PATH GRD").first().alias("PATH GRD"),
-            pl.col("PATH OCN").first().alias("PATH OCN"),
-            pl.col("PATH L1B XSP A21").first().alias("PATH L1B XSP A21"),
-            pl.col("PATH L1C XSP B17").first().alias("PATH L1C XSP B17"),
-            pl.col("Hs WW3").first().alias("Hs WW3"),
-            pl.col("Tp WW3").first().alias("Tp WW3"),
-            pl.col("U10 ecmwf").first().alias("U10 ecmwf"),
-            pl.col("v10 ecmwf").first().alias("v10 ecmwf"),
-            pl.col("start date SAFE").min().alias("start date SAFE"),
-            pl.col("horodating").first().alias("horodating"),
-            pl.col("polygon SLC").first().alias("polygon SLC"),
-            pl.col("polygon GRD").first().alias("polygon GRD"),
-            pl.col("S3path SLC").first().alias("S3path SLC"),
-            pl.col("S3path GRD").first().alias("S3path GRD"),
-            pl.col("polarization").first().alias("polarization"),
-            pl.col("unit").first().alias("unit"),
-        ])
+        aggregated = combined.group_by("_safe_id").agg(
+            [
+                pl.col("SAFE SLC").first().alias("SAFE SLC"),
+                pl.col("SAFE GRD").first().alias("SAFE GRD"),
+                pl.col("SAFE OCN").first().alias("SAFE OCN"),
+                # Use list.explode() instead of deprecated flatten()
+                pl.col("datasets").list.explode().unique().alias("datasets"),
+                # Collect categories for each group
+                pl.col("category").alias("_categories"),
+                pl.col("PATH SLC").first().alias("PATH SLC"),
+                pl.col("PATH GRD").first().alias("PATH GRD"),
+                pl.col("PATH OCN").first().alias("PATH OCN"),
+                pl.col("PATH L1B XSP A21").first().alias("PATH L1B XSP A21"),
+                pl.col("PATH L1C XSP B17").first().alias("PATH L1C XSP B17"),
+                pl.col("Hs WW3").first().alias("Hs WW3"),
+                pl.col("Tp WW3").first().alias("Tp WW3"),
+                pl.col("U10 ecmwf").first().alias("U10 ecmwf"),
+                pl.col("v10 ecmwf").first().alias("v10 ecmwf"),
+                pl.col("start date SAFE").min().alias("start date SAFE"),
+                pl.col("horodating").first().alias("horodating"),
+                pl.col("polygon SLC").first().alias("polygon SLC"),
+                pl.col("polygon GRD").first().alias("polygon GRD"),
+                pl.col("S3path SLC").first().alias("S3path SLC"),
+                pl.col("S3path GRD").first().alias("S3path GRD"),
+                pl.col("polarization").first().alias("polarization"),
+                pl.col("unit").first().alias("unit"),
+            ]
+        )
 
         # Apply the best category function to the _categories column
         aggregated = aggregated.with_columns(
             pl.struct(["_categories"])
             .map_elements(
-                lambda x: _best_category(x["_categories"]),
-                return_dtype=pl.Utf8
+                lambda x: _best_category(x["_categories"]), return_dtype=pl.Utf8
             )
             .alias("category")
         )

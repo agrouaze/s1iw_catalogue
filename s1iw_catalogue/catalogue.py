@@ -2,17 +2,18 @@
 
 from __future__ import annotations
 
+from typing import Any, Optional
+
 import datetime
 import logging
 from pathlib import Path
-from typing import Any, Optional
 
 import polars as pl
 
 from s1iw_catalogue.config import load_config
 from s1iw_catalogue.schema import create_empty_catalogue
-from s1iw_catalogue.updater import CatalogueUpdater
 from s1iw_catalogue.stats import CatalogueStats
+from s1iw_catalogue.updater import CatalogueUpdater
 
 # Set up module-level logger
 logger = logging.getLogger(__name__)
@@ -63,7 +64,9 @@ class S1IWCatalogue:
             existing_metadata = table.schema.metadata or {}
             new_metadata = {
                 **existing_metadata,
-                b"config_file": str(self._config_path).encode() if self._config_path else b"unknown"
+                b"config_file": (
+                    str(self._config_path).encode() if self._config_path else b"unknown"
+                ),
             }
 
             # Attach merged metadata to the table's schema
@@ -79,7 +82,9 @@ class S1IWCatalogue:
             logger.info(f"  metadata: {new_metadata}")
 
         except Exception as e:
-            logger.warning(f"PyArrow write with metadata failed: {e}. Falling back to polars without metadata.")
+            logger.warning(
+                f"PyArrow write with metadata failed: {e}. Falling back to polars without metadata."
+            )
             df.write_parquet(path, compression="snappy")
 
     def create(self, output_path: str | Path | None = None) -> None:
@@ -88,7 +93,9 @@ class S1IWCatalogue:
         reference_listings = self._config.get("paths", {}).get("reference_listings", {})
         df = self._updater.build_from_listings(reference_listings)
         df = self._updater.core_update(df)
-        df = self._updater._compute_category_and_conflicts(df, reference_listings, out_path)
+        df = self._updater._compute_category_and_conflicts(
+            df, reference_listings, out_path
+        )
         self._write_parquet_with_metadata(df, out_path)
         logger.info(f"Catalogue created at {out_path}")
 
@@ -193,9 +200,7 @@ class S1IWCatalogue:
 
         # Compute category after merging all rows
         existing_df = self._updater._compute_category_and_conflicts(
-            existing_df,
-            reference_listings,
-            self._catalogue_path
+            existing_df, reference_listings, self._catalogue_path
         )
 
         existing_df = existing_df.unique()
@@ -212,7 +217,12 @@ class S1IWCatalogue:
         """Merge multiple catalogues into one."""
         self._updater.merge_catalogues(input_paths, output_path, self._config_path)
 
-    def stats(self, dataset: str | None = None, verbose: bool = False, output: str | Path | None = None) -> dict[str, Any]:
+    def stats(
+        self,
+        dataset: str | None = None,
+        verbose: bool = False,
+        output: str | Path | None = None,
+    ) -> dict[str, Any]:
         df = self._load_catalogue()
         if dataset:
             df = df.filter(pl.col("datasets").list.contains(dataset))

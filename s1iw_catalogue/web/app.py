@@ -1,16 +1,16 @@
 """FastAPI application for s1iw_catalogue web interface."""
 
 import os
-from pathlib import Path
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
-from s1iw_catalogue.web.routes import stats, browse
-from s1iw_catalogue.web.utils.data_loader import catalogue_manager
+from s1iw_catalogue.web.routes import browse, stats
 from s1iw_catalogue.web.template_engine import get_templates
+from s1iw_catalogue.web.utils.data_loader import catalogue_manager
 
 
 @asynccontextmanager
@@ -22,9 +22,9 @@ async def lifespan(app: FastAPI):
         print(f"Loaded catalogue: {catalogue_path}")
     else:
         print("Warning: S1IW_CATALOGUE_PATH not set. Use --catalogue flag.")
-    
+
     yield
-    
+
     catalogue_manager.clear()
     print("Catalogue unloaded")
 
@@ -77,6 +77,8 @@ async def health():
     return {
         "status": "healthy",
         "catalogue_loaded": catalogue_manager.is_loaded(),
-        "catalogue_path": str(catalogue_manager.path) if catalogue_manager.path else None,
+        "catalogue_path": (
+            str(catalogue_manager.path) if catalogue_manager.path else None
+        ),
         "row_count": catalogue_manager.row_count(),
     }

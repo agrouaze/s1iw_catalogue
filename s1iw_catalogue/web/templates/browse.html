@@ -116,7 +116,7 @@
     function getFilterState() {
         const datasetSelect = document.getElementById('dataset-filter');
         const selectedDatasets = Array.from(datasetSelect.selectedOptions).map(opt => opt.value);
-        
+
         return {
             slc_name: document.getElementById('slc-filter').value || null,
             grd_name: document.getElementById('grd-filter').value || null,
@@ -196,7 +196,7 @@
     function updateDatasetBarChart(filters) {
         const plotDiv = document.getElementById('dataset-bar-chart');
         if (!plotDiv) return;
-        
+
         fetch('/api/browse/filter', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -213,12 +213,12 @@
         .then(data => {
             const rows = data.rows || [];
             const total = data.total || 0;
-            
+
             if (rows.length === 0) {
                 plotDiv.innerHTML = '<p class="loading">No data available</p>';
                 return;
             }
-            
+
             const datasetCounts = {};
             rows.forEach(row => {
                 const datasets = row['dataset(s) d\'appartenance'] || [];
@@ -226,15 +226,15 @@
                     datasetCounts[ds] = (datasetCounts[ds] || 0) + 1;
                 });
             });
-            
+
             const labels = Object.keys(datasetCounts);
             const values = Object.values(datasetCounts);
-            
+
             if (labels.length === 0) {
                 plotDiv.innerHTML = '<p class="loading">No dataset data available</p>';
                 return;
             }
-            
+
             const trace = {
                 x: labels,
                 y: values,
@@ -245,7 +245,7 @@
                 text: values.map(v => v.toString()),
                 textposition: 'outside'
             };
-            
+
             const layout = {
                 title: `Dataset Distribution (${total} products)`,
                 xaxis: { title: 'Dataset' },
@@ -253,7 +253,7 @@
                 height: 250,
                 margin: { l: 50, r: 20, t: 40, b: 60 }
             };
-            
+
             Plotly.newPlot('dataset-bar-chart', [trace], layout);
         })
         .catch(error => {
@@ -270,7 +270,7 @@
         fetch('/api/browse/map', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ 
+            body: JSON.stringify({
                 filter: filters,
                 max_polygons: 100
             })
@@ -285,7 +285,7 @@
         })
         .then(data => {
             const features = data.features || [];
-            
+
             if (features.length === 0) {
                 plotDiv.innerHTML = '<p class="loading">No footprints available for the selected filters</p>';
                 return;
@@ -307,7 +307,7 @@
             features.forEach(feature => {
                 const geom = feature.geometry;
                 const props = feature.properties;
-                
+
                 let lon, lat;
                 if (geom.type === 'Point') {
                     lon = geom.coordinates[0];
@@ -330,17 +330,17 @@
                 }
 
                 const datasets = (props.dataset || []).join(', ');
-                const hoverText = 
+                const hoverText =
                     `<b>SAFE SLC:</b> ${props.safe_slc || 'N/A'}<br>` +
                     `<b>SAFE GRD:</b> ${props.safe_grd || 'N/A'}<br>` +
                     `<b>Satellite:</b> ${props.satellite || 'N/A'}<br>` +
                     `<b>Start Date:</b> ${props.start_date || 'N/A'}<br>` +
                     `<b>Datasets:</b> ${datasets || 'N/A'}`;
                 hoverTexts.push(hoverText);
-                
+
                 const satellite = props.satellite || 'unknown';
                 colors.push(satelliteColors[satellite] || defaultColor);
-                
+
                 lons.push(lon);
                 lats.push(lat);
             });
@@ -348,7 +348,7 @@
             let centerLon = 0;
             let centerLat = 20;
             let zoom = 2;
-            
+
             if (lons.length > 0) {
                 centerLon = lons.reduce((a, b) => a + b, 0) / lons.length;
                 centerLat = lats.reduce((a, b) => a + b, 0) / lats.length;
@@ -416,7 +416,7 @@
         fetch('/api/browse/heatmap/hs_tp', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ 
+            body: JSON.stringify({
                 filter: filters,
                 variable: "hs_tp"
             })

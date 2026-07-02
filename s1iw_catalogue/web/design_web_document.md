@@ -85,7 +85,7 @@ s1iw_catalogue/
 #### 3.1.1 Global Statistics Cards
 - Total SAFE entries
 - SLC count (with percentage)
-- GRD count (with percentage)  
+- GRD count (with percentage)
 - OCN count (with percentage)
 - Linked pairs count
 
