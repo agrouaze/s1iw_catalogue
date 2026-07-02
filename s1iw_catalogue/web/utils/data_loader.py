@@ -1,7 +1,5 @@
 """Catalogue loading and caching utilities."""
 
-from typing import Optional
-
 import logging
 from pathlib import Path
 
