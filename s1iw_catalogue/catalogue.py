@@ -5,39 +5,99 @@ from __future__ import annotations
 from typing import Any, Optional
 
 import datetime
+import logging
 from pathlib import Path
 
 import polars as pl
 
 from s1iw_catalogue.config import load_config
 from s1iw_catalogue.schema import create_empty_catalogue
+from s1iw_catalogue.stats import CatalogueStats
 from s1iw_catalogue.updater import CatalogueUpdater
+
+# Set up module-level logger
+logger = logging.getLogger(__name__)
+
+# # Ensure the logger has a handler (similar to updater.py)
+# if not logger.handlers:
+#     handler = logging.StreamHandler()
+#     formatter = logging.Formatter(
+#         "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+#     )
+#     handler.setFormatter(formatter)
+#     logger.addHandler(handler)
+#     logger.setLevel(logging.INFO)
 
 
 class S1IWCatalogue:
-    """Main class for managing the Sentinel-1 IW exhaustive catalogue."""
-
     def __init__(
         self,
         catalogue_path: str | Path,
         config: str | Path | dict[str, Any] | None = None,
+        config_path: str | Path | None = None,
     ) -> None:
         self._catalogue_path = Path(catalogue_path)
-        self._config = load_config() if config is None else config
-        self._updater = CatalogueUpdater(self._config)  # type: ignore[arg-type]
+        # Resolve config path to absolute
+        if config_path:
+            self._config_path = Path(config_path).resolve()
+        elif isinstance(config, (str, Path)):
+            self._config_path = Path(config).resolve()
+        else:
+            self._config_path = None
+
+        # Load config
+        if isinstance(config, (str, Path)):
+            self._config = load_config(config_path=config)
+        else:
+            self._config = load_config() if config is None else config
+
+        self._updater = CatalogueUpdater(config=self._config, config_path=self._config_path)  # type: ignore[arg-type]
+
+    def _write_parquet_with_metadata(self, df: pl.DataFrame, path: Path) -> None:
+        try:
+            import pyarrow as pa
+            import pyarrow.parquet as pq
+
+            table = df.to_arrow()
+
+            # Merge new metadata with any existing metadata
+            existing_metadata = table.schema.metadata or {}
+            new_metadata = {
+                **existing_metadata,
+                b"config_file": (
+                    str(self._config_path).encode() if self._config_path else b"unknown"
+                ),
+            }
+
+            # Attach merged metadata to the table's schema
+            table_with_metadata = table.replace_schema_metadata(new_metadata)
+
+            pq.write_table(
+                table_with_metadata,
+                path,
+                compression="snappy",
+            )
+
+            logger.info(f"Written parquet with config metadata: {path}")
+            logger.info(f"  metadata: {new_metadata}")
+
+        except Exception as e:
+            logger.warning(
+                f"PyArrow write with metadata failed: {e}. Falling back to polars without metadata."
+            )
+            df.write_parquet(path, compression="snappy")
 
     def create(self, output_path: str | Path | None = None) -> None:
         """Create a brand new catalogue from scratch."""
         out_path = Path(output_path) if output_path else self._catalogue_path
-        # Get listing configurations (can be string, list, or directory)
-        slc_listings = self._config.get("paths", {}).get("reference_listings", {}).get("slc", {})  # type: ignore[union-attr]
-        grd_listings = self._config.get("paths", {}).get("reference_listings", {}).get("grd", {})  # type: ignore[union-attr]
-        # Build catalogue from listings
-        df = self._updater.build_from_listings(slc_listings, grd_listings)
-        df = self._updater.link_slc_grd(df)
-        # Write to Parquet
-        df.write_parquet(out_path, compression="snappy")
-        print(f"Catalogue created at {out_path}")
+        reference_listings = self._config.get("paths", {}).get("reference_listings", {})
+        df = self._updater.build_from_listings(reference_listings)
+        df = self._updater.core_update(df)
+        df = self._updater._compute_category_and_conflicts(
+            df, reference_listings, out_path
+        )
+        self._write_parquet_with_metadata(df, out_path)
+        logger.info(f"Catalogue created at {out_path}")
 
     def update(self, force_meteo_refresh: bool = False) -> None:
         """
@@ -45,33 +105,27 @@ class S1IWCatalogue:
 
         Behavior:
         - Existing rows: preserve all columns except:
-          - dataset(s) d'appartenance: merge new dataset names
+          - datasets: merge new dataset names
           - horodating: update if row changed
           - presence columns: fill if empty (not overwrite)
           - polygon/S3path: fill if empty (not overwrite)
         - New rows: append with full pipeline
         - Rows that become linked: merge and update horodating
         """
-        print(f"Updating catalogue at {self._catalogue_path}...")
+        logger.info(f"Updating catalogue at {self._catalogue_path}...")
 
-        # 1. Load existing catalogue
         if not self._catalogue_path.exists():
-            print(f"Error: Catalogue file not found: {self._catalogue_path}")
+            logger.error(f"Catalogue file not found: {self._catalogue_path}")
             return
 
         existing_df = pl.read_parquet(self._catalogue_path)
-        print(f"Loaded existing catalogue with {existing_df.height} rows.")
+        logger.info(f"Loaded existing catalogue with {existing_df.height} rows.")
 
-        # 2. Read new listings from config
-        slc_listings = self._config.get("paths", {}).get("reference_listings", {}).get("slc", {})  # type: ignore[union-attr]
-        grd_listings = self._config.get("paths", {}).get("reference_listings", {}).get("grd", {})  # type: ignore[union-attr]
+        reference_listings = self._config.get("paths", {}).get("reference_listings", {})
+        logger.info("Building new rows from listings...")
+        new_df = self._updater.build_from_listings(reference_listings)
+        logger.info(f"Built {new_df.height} rows from listings.")
 
-        # 3. Build new rows from listings (raw, not linked yet)
-        print("Building new rows from listings...")
-        new_df = self._updater.build_from_listings(slc_listings, grd_listings)
-        print(f"Built {new_df.height} rows from listings.")
-
-        # 4. Identify existing SAFE names for lookup
         existing_slc = set(
             existing_df.filter(pl.col("SAFE SLC").is_not_null())["SAFE SLC"].to_list()
         )
@@ -79,33 +133,25 @@ class S1IWCatalogue:
             existing_df.filter(pl.col("SAFE GRD").is_not_null())["SAFE GRD"].to_list()
         )
 
-        # 5. Separate new rows into: existing (to merge) and truly new (to append)
-        rows_to_merge = []  # rows that already exist (need dataset merge)
-        rows_to_append = []  # rows that are completely new
+        rows_to_merge = []
+        rows_to_append = []
 
         for row in new_df.to_dicts():
             slc = row.get("SAFE SLC")
             grd = row.get("SAFE GRD")
-
-            # Check if this row already exists in the catalogue
             is_existing = (slc and slc in existing_slc) or (grd and grd in existing_grd)
-
             if is_existing:
                 rows_to_merge.append(row)
             else:
                 rows_to_append.append(row)
 
-        print(
+        logger.info(
             f"Found {len(rows_to_merge)} existing rows to merge, {len(rows_to_append)} new rows to append."
         )
 
-        # 6. Merge existing rows: update dataset(s) and horodating
         if rows_to_merge:
             merge_df = pl.DataFrame(rows_to_merge, schema=existing_df.schema)
 
-            # For each existing row, merge dataset arrays and update horodating
-            # We need to join on SAFE SLC or SAFE GRD
-            # Create a unique key for joining
             existing_df = existing_df.with_columns(
                 pl.when(pl.col("SAFE SLC").is_not_null())
                 .then(pl.col("SAFE SLC"))
@@ -119,60 +165,57 @@ class S1IWCatalogue:
                 .alias("_join_key")
             )
 
-            # Join to merge datasets
             merged = existing_df.join(
-                merge_df.select(["_join_key", "dataset(s) d'appartenance"]),
+                merge_df.select(["_join_key", "datasets"]),
                 on="_join_key",
                 how="left",
                 suffix="_new",
             )
 
-            # Merge dataset arrays (UNION)
             merged = merged.with_columns(
                 pl.concat_list(
-                    pl.col("dataset(s) d'appartenance"),
-                    pl.col("dataset(s) d'appartenance_new"),
+                    pl.col("datasets"),
+                    pl.col("datasets_new"),
                 )
                 .list.unique()
-                .alias("dataset(s) d'appartenance")
+                .alias("datasets")
             )
-            # Update horodating to now if datasets changed
             merged = merged.with_columns(
-                pl.when(pl.col("dataset(s) d'appartenance_new").list.len() > 0)
+                pl.when(pl.col("datasets_new").list.len() > 0)
                 .then(pl.lit(datetime.datetime.now()))
                 .otherwise(pl.col("horodating"))
                 .alias("horodating")
             )
-            # Drop temporary columns
-            merged = merged.drop(["_join_key", "dataset(s) d'appartenance_new"])
+            merged = merged.drop(["_join_key", "datasets_new"])
 
-            # Run the full pipeline on merged rows to update presence, polygons, etc.
-            # Only for rows that were merged (their join key exists in both)
-            # But we need to preserve rows that didn't change
-            # For simplicity, we run the full pipeline on all rows
-            # This will update presence, polygons, etc. for rows that were missing them
-            merged = self._updater.link_slc_grd(merged)
+            merged = self._updater.core_upate(merged)
             existing_df = merged
-            print(f"Merged {len(rows_to_merge)} existing rows.")
+            logger.info(f"Merged {len(rows_to_merge)} existing rows.")
 
-        # 7. Append new rows: run full pipeline
         if rows_to_append:
             append_df = pl.DataFrame(rows_to_append, schema=existing_df.schema)
-            # Run full pipeline on new rows
-            append_df = self._updater.link_slc_grd(append_df)
-            # Append to existing
+            append_df = self._updater.core_upate(append_df)
             existing_df = pl.concat([existing_df, append_df], how="vertical_relaxed")
-            print(f"Appended {len(rows_to_append)} new rows.")
+            logger.info(f"Appended {len(rows_to_append)} new rows.")
 
-        # 8. Deduplicate (just in case)
+        # Compute category after merging all rows
+        existing_df = self._updater._compute_category_and_conflicts(
+            existing_df, reference_listings, self._catalogue_path
+        )
+
         existing_df = existing_df.unique()
 
-        # 9. Write atomic (temp file then rename)
+        # Write with metadata
         temp_path = self._catalogue_path.with_suffix(".parquet.tmp")
-        existing_df.write_parquet(temp_path, compression="snappy")
+        self._write_parquet_with_metadata(existing_df, temp_path)
         temp_path.rename(self._catalogue_path)
 
-        print(f"Update complete. Final catalogue has {existing_df.height} rows.")
+        logger.info(f"Update complete. Final catalogue has {existing_df.height} rows.")
+        logger.info(f"Path: {self._catalogue_path}")
+
+    def merge(self, input_paths: list[Path], output_path: Path) -> None:
+        """Merge multiple catalogues into one."""
+        self._updater.merge_catalogues(input_paths, output_path, self._config_path)
 
     def stats(
         self,
@@ -180,8 +223,20 @@ class S1IWCatalogue:
         verbose: bool = False,
         output: str | Path | None = None,
     ) -> dict[str, Any]:
-        # TODO: implement stats
-        return {}
+        df = self._load_catalogue()
+        if dataset:
+            df = df.filter(pl.col("datasets").list.contains(dataset))
+            if df.height == 0:
+                logger.warning(f"No products found for dataset '{dataset}'")
+                return {}
+        stats_obj = CatalogueStats(df)
+        result = stats_obj.to_dict()
+        if output:
+            stats_obj.to_json(Path(output))
+            logger.info(f"Statistics exported to {output}")
+        if verbose:
+            print(stats_obj.to_string())
+        return result
 
     def backup(self, backup_dir: str | Path | None = None) -> Path:
         # TODO: implement backup
@@ -194,8 +249,47 @@ class S1IWCatalogue:
     def get_centroids(self) -> pl.DataFrame:
         return create_empty_catalogue()
 
+    # ---------- NEW METHODS ----------
+
+    def get_dataset_metadata(self) -> dict[str, dict]:
+        """
+        Return dataset metadata (description, category, type) from the config file.
+        """
+        reference_listings = self._config.get("paths", {}).get("reference_listings", {})
+        
+        # Debug logging
+        logger.debug(f"reference_listings keys: {list(reference_listings.keys())}")
+        
+        metadata = {}
+        for dataset_name, dataset_info in reference_listings.items():
+            logger.debug(f"Processing '{dataset_name}' -> type: {type(dataset_info)}")
+            
+            if not isinstance(dataset_info, dict):
+                logger.debug(f"Skipping '{dataset_name}' - not a dict")
+                continue
+
+            if "path" in dataset_info:
+                logger.debug(f"Found dataset '{dataset_name}' with path: {dataset_info.get('path')}")
+                metadata[dataset_name] = {
+                    "description": dataset_info.get("description", ""),
+                    "category": dataset_info.get("category", "undefined"),
+                    "type": dataset_info.get("type", ""),
+                }
+            else:
+                logger.debug(f"Skipping '{dataset_name}' - no 'path' key. Keys: {list(dataset_info.keys())}")
+
+        logger.debug(f"Found {len(metadata)} datasets")
+        return metadata
+
+    def get_config_path(self) -> Path | None:
+        """Return the path to the config file used for this catalogue."""
+        return self._config_path
+
     def _load_catalogue(self) -> pl.DataFrame:
-        return create_empty_catalogue()
+        """Load the catalogue from the stored path."""
+        if not self._catalogue_path.exists():
+            raise FileNotFoundError(f"Catalogue not found: {self._catalogue_path}")
+        return pl.read_parquet(self._catalogue_path)
 
     def _save_catalogue(self, df: pl.DataFrame) -> None:
         pass

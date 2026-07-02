@@ -1,0 +1,575 @@
+{% extends "base.html" %}
+
+{% block title %}Browse Catalogue{% endblock %}
+
+{% block extra_head %}
+<link rel="stylesheet" href="/static/css/browse.css">
+<script src="https://cdn.jsdelivr.net/npm/@turf/turf@6/turf.min.js"></script>
+{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <h1>🔍 Browse Catalogue</h1>
+    <p class="subtitle">Explore products with filters and visualizations</p>
+</div>
+
+<!-- Filters -->
+<div class="filter-section">
+    <h2>🔎 Filters</h2>
+    <p class="filter-help">Select criteria to filter the catalogue. Use Ctrl/Cmd to select multiple options.</p>
+    <form id="filter-form">
+        <div class="filter-row">
+            <div class="filter-group">
+                <label class="filter-label"><span class="icon">📝</span> SAFE SLC</label>
+                <input type="text" id="slc-filter" placeholder="Partial match">
+            </div>
+            <div class="filter-group">
+                <label class="filter-label"><span class="icon">📝</span> SAFE GRD</label>
+                <input type="text" id="grd-filter" placeholder="Partial match">
+            </div>
+            <div class="filter-group">
+                <label class="filter-label"><span class="icon">📁</span> Dataset</label>
+                <select id="dataset-filter" multiple>
+                    <!-- Options will be populated dynamically -->
+                </select>
+            </div>
+        </div>
+        <div class="filter-row">
+            <div class="filter-group">
+                <label class="filter-label"><span class="icon">🔬</span> Polarization</label>
+                <select id="polarization-filter" multiple>
+                    <option value="1SDV">1SDV</option>
+                    <option value="1SSV">1SSV</option>
+                    <option value="1SDH">1SDH</option>
+                    <option value="1SSH">1SSH</option>
+                </select>
+            </div>
+            <div class="filter-group">
+                <label class="filter-label"><span class="icon">🛰️</span> Satellite</label>
+                <select id="satellite-filter" multiple>
+                    <option value="S1A">S1A</option>
+                    <option value="S1B">S1B</option>
+                    <option value="S1C">S1C</option>
+                    <option value="S1D">S1D</option>
+                </select>
+            </div>
+            <div class="filter-group">
+                <label class="filter-label"><span class="icon">📅</span> Date range</label>
+                <div class="date-range">
+                    <input type="date" id="date-start" placeholder="Start">
+                    <input type="date" id="date-end" placeholder="End">
+                </div>
+            </div>
+            <div class="filter-group filter-actions">
+                <button type="submit" class="btn btn-primary">Apply Filters</button>
+                <button type="reset" class="btn btn-secondary">Reset</button>
+            </div>
+        </div>
+    </form>
+</div>
+
+<!-- Visualizations Grid -->
+<div class="viz-grid">
+    <div class="viz-item">
+        <h3>🌍 Products Map</h3>
+        <div id="map-plot" class="plot-container"><p class="loading">Loading map data...</p></div>
+    </div>
+    <div class="viz-item">
+        <h3>📊 Dataset Distribution</h3>
+        <div id="dataset-bar-chart" class="plot-container"><p class="loading">Loading dataset distribution...</p></div>
+    </div>
+    <div class="viz-item">
+        <h3>📊 Polarization & Satellite</h3>
+        <div id="pie-plot" class="plot-container"><p class="loading">Pie chart (coming soon)</p></div>
+    </div>
+    <div class="viz-item">
+        <h3>🌊 Hs vs Tp Heatmap</h3>
+        <div id="hs-tp-plot" class="plot-container"><p class="loading">Loading data...</p></div>
+    </div>
+</div>
+
+<!-- Results Table -->
+<div class="results-section">
+    <h2>📋 Filtered Results</h2>
+    <div id="results-count" class="results-count"></div>
+    <div class="results-scroll">
+        <div class="table-wrapper" id="results-table">
+            <p class="loading">Apply filters to see results</p>
+        </div>
+    </div>
+    <div id="pagination">
+        <button id="prev-page" class="btn btn-secondary" disabled>◀ Previous</button>
+        <span class="page-info" id="page-info">Page 1</span>
+        <button id="next-page" class="btn btn-secondary" disabled>Next ▶</button>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_scripts %}
+<script>
+    let currentPage = 0;
+    const pageSize = 100;
+    let datasetMetadata = {};  // Store dataset metadata globally
+
+    // Load dataset metadata on page load
+    function loadDatasetMetadata() {
+        return fetch('/api/stats/datasets_metadata')
+            .then(response => {
+                if (!response.ok) {
+                    throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+                }
+                return response.json();
+            })
+            .then(data => {
+                datasetMetadata = data.metadata || {};
+                populateDatasetFilter(datasetMetadata);
+                return datasetMetadata;
+            })
+            .catch(error => {
+                console.error('Error loading dataset metadata:', error);
+                // Fallback: show a message in the filter
+                const select = document.getElementById('dataset-filter');
+                if (select) {
+                    select.innerHTML = '<option value="" disabled>Error loading datasets</option>';
+                }
+                return {};
+            });
+    }
+
+    // Populate the dataset filter dropdown
+    function populateDatasetFilter(metadata) {
+        const select = document.getElementById('dataset-filter');
+        if (!select) return;
+
+        const datasetNames = Object.keys(metadata);
+        if (datasetNames.length === 0) {
+            select.innerHTML = '<option value="" disabled>No datasets found</option>';
+            return;
+        }
+
+        let html = '';
+        datasetNames.forEach(name => {
+            const desc = metadata[name]?.description || '';
+            const category = metadata[name]?.category || '';
+            const label = desc ? `${name} (${desc})` : name;
+            html += `<option value="${name}">${label}</option>`;
+        });
+        select.innerHTML = html;
+    }
+
+    function getFilterState() {
+        const datasetSelect = document.getElementById('dataset-filter');
+        const selectedDatasets = Array.from(datasetSelect.selectedOptions).map(opt => opt.value);
+
+        return {
+            slc_name: document.getElementById('slc-filter').value || null,
+            grd_name: document.getElementById('grd-filter').value || null,
+            datasets: selectedDatasets,
+            polarization: Array.from(document.getElementById('polarization-filter').selectedOptions).map(opt => opt.value),
+            satellites: Array.from(document.getElementById('satellite-filter').selectedOptions).map(opt => opt.value),
+            date_start: document.getElementById('date-start').value || null,
+            date_end: document.getElementById('date-end').value || null,
+            limit: pageSize,
+            offset: currentPage * pageSize
+        };
+    }
+
+    function updateResultsTable(filters) {
+        const tableDiv = document.getElementById('results-table');
+        const countDiv = document.getElementById('results-count');
+        if (!tableDiv) return;
+        tableDiv.innerHTML = '<p class="loading">Loading...</p>';
+
+        fetch('/api/browse/filter', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(filters)
+        })
+        .then(response => {
+            if (!response.ok) {
+                return response.text().then(text => {
+                    throw new Error(`HTTP ${response.status}: ${text.substring(0, 200)}`);
+                });
+            }
+            return response.json();
+        })
+        .then(data => {
+            const rows = data.rows || [];
+            const total = data.total || 0;
+            if (countDiv) {
+                countDiv.textContent = `Showing ${filters.offset + 1}-${Math.min(filters.offset + rows.length, total)} of ${total} results`;
+            }
+
+            let html = '<table class="table"><thead><tr><th>SAFE SLC</th><th>SAFE GRD</th><th>Dataset</th><th>Start Date</th><th>Polarization</th><th>Satellite</th></tr></thead><tbody>';
+            if (rows.length === 0) {
+                html += '<tr><td colspan="6">No results found</td></tr>';
+            } else {
+                rows.forEach(row => {
+                    const datasets = row['dataset(s) d\'appartenance'] || [];
+                    // Map dataset names to display names with descriptions
+                    const displayDatasets = datasets.map(ds => {
+                        const desc = datasetMetadata[ds]?.description || '';
+                        return desc ? `${ds} (${desc})` : ds;
+                    });
+                    html += `<tr>
+                        <td>${row['SAFE SLC'] || ''}</td>
+                        <td>${row['SAFE GRD'] || ''}</td>
+                        <td>${displayDatasets.join(', ')}</td>
+                        <td>${row['start date SAFE'] || ''}</td>
+                        <td>${row['polarization'] || ''}</td>
+                        <td>${row['unité'] || ''}</td>
+                    </tr>`;
+                });
+            }
+            html += '</tbody></table>';
+            tableDiv.innerHTML = html;
+
+            const totalPages = Math.ceil(total / pageSize);
+            const pageInfo = document.getElementById('page-info');
+            if (pageInfo) {
+                pageInfo.textContent = `Page ${currentPage + 1} of ${totalPages || 1}`;
+            }
+            const prevBtn = document.getElementById('prev-page');
+            const nextBtn = document.getElementById('next-page');
+            if (prevBtn) prevBtn.disabled = currentPage === 0;
+            if (nextBtn) nextBtn.disabled = currentPage >= totalPages - 1 || totalPages === 0;
+        })
+        .catch(error => {
+            console.error('Error fetching results:', error);
+            if (tableDiv) {
+                tableDiv.innerHTML = `<p class="loading" style="color: #dc3545;">Error: ${error.message}</p>`;
+            }
+        });
+    }
+
+    function updateDatasetBarChart(filters) {
+        const plotDiv = document.getElementById('dataset-bar-chart');
+        if (!plotDiv) return;
+
+        fetch('/api/browse/filter', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ ...filters, limit: 1000, offset: 0 })
+        })
+        .then(response => {
+            if (!response.ok) {
+                return response.text().then(text => {
+                    throw new Error(`HTTP ${response.status}: ${text.substring(0, 200)}`);
+                });
+            }
+            return response.json();
+        })
+        .then(data => {
+            const rows = data.rows || [];
+            const total = data.total || 0;
+
+            if (rows.length === 0) {
+                plotDiv.innerHTML = '<p class="loading">No data available</p>';
+                return;
+            }
+
+            const datasetCounts = {};
+            rows.forEach(row => {
+                const datasets = row['dataset(s) d\'appartenance'] || [];
+                datasets.forEach(ds => {
+                    datasetCounts[ds] = (datasetCounts[ds] || 0) + 1;
+                });
+            });
+
+            const labels = Object.keys(datasetCounts);
+            const values = Object.values(datasetCounts);
+
+            if (labels.length === 0) {
+                plotDiv.innerHTML = '<p class="loading">No dataset data available</p>';
+                return;
+            }
+
+            // Use display names with descriptions for labels
+            const displayLabels = labels.map(ds => {
+                const desc = datasetMetadata[ds]?.description || '';
+                return desc ? `${ds} (${desc})` : ds;
+            });
+
+            const trace = {
+                x: displayLabels,
+                y: values,
+                type: 'bar',
+                marker: {
+                    color: ['#1a365d', '#2c5282', '#48bb78', '#f6ad55', '#fc8181', '#9f7aea'],
+                },
+                text: values.map(v => v.toString()),
+                textposition: 'outside'
+            };
+
+            const layout = {
+                title: `Dataset Distribution (${total} products)`,
+                xaxis: { title: 'Dataset' },
+                yaxis: { title: 'Count' },
+                height: 250,
+                margin: { l: 50, r: 20, t: 40, b: 60 }
+            };
+
+            Plotly.newPlot('dataset-bar-chart', [trace], layout);
+        })
+        .catch(error => {
+            console.error('Error fetching dataset distribution:', error);
+            plotDiv.innerHTML = `<p class="loading" style="color: #dc3545;">Error: ${error.message}</p>`;
+        });
+    }
+
+    function updateMap(filters) {
+        const plotDiv = document.getElementById('map-plot');
+        if (!plotDiv) return;
+        plotDiv.innerHTML = '<p class="loading">Loading map data...</p>';
+
+        fetch('/api/browse/map', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                filter: filters,
+                max_polygons: 100
+            })
+        })
+        .then(response => {
+            if (!response.ok) {
+                return response.text().then(text => {
+                    throw new Error(`HTTP ${response.status}: ${text.substring(0, 200)}`);
+                });
+            }
+            return response.json();
+        })
+        .then(data => {
+            const features = data.features || [];
+
+            if (features.length === 0) {
+                plotDiv.innerHTML = '<p class="loading">No footprints available for the selected filters</p>';
+                return;
+            }
+
+            const satelliteColors = {
+                'S1A': '#1a365d',
+                'S1B': '#2c5282',
+                'S1C': '#48bb78',
+                'S1D': '#f6ad55'
+            };
+            const defaultColor = '#9f7aea';
+
+            const lons = [];
+            const lats = [];
+            const hoverTexts = [];
+            const colors = [];
+
+            features.forEach(feature => {
+                const geom = feature.geometry;
+                const props = feature.properties;
+
+                let lon, lat;
+                if (geom.type === 'Point') {
+                    lon = geom.coordinates[0];
+                    lat = geom.coordinates[1];
+                } else if (geom.type === 'Polygon' || geom.type === 'MultiPolygon') {
+                    try {
+                        const coords = geom.type === 'Polygon' ? geom.coordinates[0] : geom.coordinates[0][0];
+                        let sumLon = 0, sumLat = 0;
+                        coords.forEach(coord => {
+                            sumLon += coord[0];
+                            sumLat += coord[1];
+                        });
+                        lon = sumLon / coords.length;
+                        lat = sumLat / coords.length;
+                    } catch (e) {
+                        return;
+                    }
+                } else {
+                    return;
+                }
+
+                const datasets = (props.dataset || []).join(', ');
+                const hoverText =
+                    `<b>SAFE SLC:</b> ${props.safe_slc || 'N/A'}<br>` +
+                    `<b>SAFE GRD:</b> ${props.safe_grd || 'N/A'}<br>` +
+                    `<b>Satellite:</b> ${props.satellite || 'N/A'}<br>` +
+                    `<b>Start Date:</b> ${props.start_date || 'N/A'}<br>` +
+                    `<b>Datasets:</b> ${datasets || 'N/A'}`;
+                hoverTexts.push(hoverText);
+
+                const satellite = props.satellite || 'unknown';
+                colors.push(satelliteColors[satellite] || defaultColor);
+
+                lons.push(lon);
+                lats.push(lat);
+            });
+
+            let centerLon = 0;
+            let centerLat = 20;
+            let zoom = 2;
+
+            if (lons.length > 0) {
+                centerLon = lons.reduce((a, b) => a + b, 0) / lons.length;
+                centerLat = lats.reduce((a, b) => a + b, 0) / lats.length;
+                const lonSpread = Math.max(...lons) - Math.min(...lons);
+                const latSpread = Math.max(...lats) - Math.min(...lats);
+                const maxSpread = Math.max(lonSpread, latSpread);
+                if (maxSpread < 10) zoom = 6;
+                else if (maxSpread < 30) zoom = 4;
+                else if (maxSpread < 60) zoom = 3;
+                else zoom = 2;
+            }
+
+            const trace = {
+                type: 'scattermapbox',
+                lon: lons,
+                lat: lats,
+                mode: 'markers',
+                marker: {
+                    size: 12,
+                    color: colors,
+                    opacity: 0.8,
+                    symbol: 'circle'
+                },
+                text: hoverTexts,
+                hoverinfo: 'text',
+                hoverlabel: {
+                    bgcolor: 'white',
+                    font: { size: 12 }
+                },
+                name: 'Products'
+            };
+
+            const layout = {
+                mapbox: {
+                    style: 'open-street-map',
+                    center: {
+                        lon: centerLon,
+                        lat: centerLat
+                    },
+                    zoom: zoom,
+                },
+                margin: { l: 0, r: 0, t: 0, b: 0 },
+                height: 280,
+                hovermode: 'closest',
+                showlegend: false
+            };
+
+            const titleElement = document.querySelector('#map-plot')?.parentElement?.querySelector('h3');
+            if (titleElement) {
+                titleElement.textContent = `🌍 Products (${features.length} shown, colored by satellite)`;
+            }
+
+            Plotly.react('map-plot', [trace], layout, { responsive: true });
+        })
+        .catch(error => {
+            console.error('Error fetching map data:', error);
+            plotDiv.innerHTML = `<p class="loading" style="color: #dc3545;">Error: ${error.message}</p>`;
+        });
+    }
+
+    function updateHsTpHeatmap(filters) {
+        const plotDiv = document.getElementById('hs-tp-plot');
+        if (!plotDiv) return;
+
+        fetch('/api/browse/heatmap/hs_tp', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                filter: filters,
+                variable: "hs_tp"
+            })
+        })
+        .then(response => {
+            if (!response.ok) {
+                return response.text().then(text => {
+                    throw new Error(`HTTP ${response.status}: ${text.substring(0, 200)}`);
+                });
+            }
+            return response.json();
+        })
+        .then(data => {
+            if (data.data && data.data.hs && data.data.hs.length > 0) {
+                const trace = {
+                    x: data.data.hs,
+                    y: data.data.tp,
+                    mode: 'markers',
+                    marker: { size: 5, color: 'blue', opacity: 0.6 },
+                    type: 'scatter'
+                };
+                const layout = {
+                    title: `Hs vs Tp (${data.count} points)`,
+                    xaxis: { title: 'Hs (m)' },
+                    yaxis: { title: 'Tp (s)' },
+                    height: 250,
+                    margin: { l: 50, r: 20, t: 40, b: 50 }
+                };
+                Plotly.newPlot('hs-tp-plot', [trace], layout);
+            } else {
+                plotDiv.innerHTML = '<p class="loading">No Hs/Tp data available</p>';
+            }
+        })
+        .catch(error => {
+            console.error('Error fetching heatmap data:', error);
+            plotDiv.innerHTML = `<p class="loading" style="color: #dc3545;">Error: ${error.message}</p>`;
+        });
+    }
+
+    // Event listeners - SINGLE SET
+    document.addEventListener('DOMContentLoaded', function() {
+        // First load dataset metadata, then initialize
+        loadDatasetMetadata().then(() => {
+            const filterForm = document.getElementById('filter-form');
+            const resetBtn = filterForm?.querySelector('button[type="reset"]');
+            const prevBtn = document.getElementById('prev-page');
+            const nextBtn = document.getElementById('next-page');
+
+            if (filterForm) {
+                filterForm.addEventListener('submit', function(e) {
+                    e.preventDefault();
+                    currentPage = 0;
+                    const filters = getFilterState();
+                    updateResultsTable(filters);
+                    updateDatasetBarChart(filters);
+                    updateHsTpHeatmap(filters);
+                    updateMap(filters);
+                });
+            }
+
+            if (resetBtn) {
+                resetBtn.addEventListener('click', function(e) {
+                    e.preventDefault();
+                    filterForm?.reset();
+                    currentPage = 0;
+                    const filters = getFilterState();
+                    updateResultsTable(filters);
+                    updateDatasetBarChart(filters);
+                    updateHsTpHeatmap(filters);
+                    updateMap(filters);
+                });
+            }
+
+            if (prevBtn) {
+                prevBtn.addEventListener('click', function() {
+                    if (currentPage > 0) {
+                        currentPage--;
+                        const filters = getFilterState();
+                        updateResultsTable(filters);
+                    }
+                });
+            }
+
+            if (nextBtn) {
+                nextBtn.addEventListener('click', function() {
+                    currentPage++;
+                    const filters = getFilterState();
+                    updateResultsTable(filters);
+                });
+            }
+
+            // Initial load
+            const initialFilters = getFilterState();
+            updateResultsTable(initialFilters);
+            updateDatasetBarChart(initialFilters);
+            updateHsTpHeatmap(initialFilters);
+            updateMap(initialFilters);
+        });
+    });
+</script>
+{% endblock %}

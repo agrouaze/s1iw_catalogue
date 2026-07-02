@@ -1,0 +1,167 @@
+{% extends "base.html" %}
+
+{% block title %}s1iw_catalogue Dashboard{% endblock %}
+
+{% block content %}
+<div class="page-header">
+    <h1>📊 Catalogue Dashboard</h1>
+    <p class="subtitle">Overview of the Sentinel-1 IW catalogue</p>
+</div>
+
+<!-- Stats Cards -->
+<div class="stats-grid" id="stats-container">
+    <div class="stat-card"><div class="stat-number" id="total-count">...</div><div class="stat-label">Total SAFE entries</div></div>
+    <div class="stat-card accent"><div class="stat-number" id="slc-count">...</div><div class="stat-label">SLC products</div></div>
+    <div class="stat-card warning"><div class="stat-number" id="grd-count">...</div><div class="stat-label">GRD products</div></div>
+    <div class="stat-card purple"><div class="stat-number" id="ocn-count">...</div><div class="stat-label">OCN products</div></div>
+</div>
+
+<!-- Dataset Completeness -->
+<div class="section-card">
+    <h2>📁 Dataset Completeness</h2>
+    <div class="table-wrapper" id="dataset-table">
+        <p>Loading dataset statistics...</p>
+    </div>
+</div>
+
+<!-- Presence Completeness -->
+<div class="section-card">
+    <h2>💾 Presence Completeness</h2>
+    <div id="presence-chart" class="chart-container"></div>
+</div>
+{% endblock %}
+
+{% block extra_scripts %}
+<script>
+    // Global variable to store dataset metadata
+    let datasetMetadata = {};
+
+    // Load dataset metadata
+    function loadDatasetMetadata() {
+        return fetch('/api/stats/datasets_metadata')
+            .then(response => {
+                if (!response.ok) {
+                    throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+                }
+                return response.json();
+            })
+            .then(data => {
+                datasetMetadata = data.metadata || {};
+                return datasetMetadata;
+            })
+            .catch(error => {
+                console.error('Error loading dataset metadata:', error);
+                return {};
+            });
+    }
+
+    // Get display name for a dataset (with description if available)
+    function getDatasetDisplayName(datasetName) {
+        const meta = datasetMetadata[datasetName];
+        if (meta && meta.description) {
+            return `${datasetName} (${meta.description})`;
+        }
+        return datasetName;
+    }
+
+    // Helper functions for rendering cells
+    function renderCell(value) {
+        if (value === undefined || value === null) return `<td>⚪ 0%</td>`;
+        let emoji, colorClass;
+        if (value >= 80) { emoji = '🟢'; colorClass = 'cell-green'; }
+        else if (value >= 50) { emoji = '🟡'; colorClass = 'cell-yellow'; }
+        else if (value > 0) { emoji = '🔴'; colorClass = 'cell-red'; }
+        else { emoji = '⚪'; colorClass = 'cell-grey'; }
+        return `<td><span class="cell-badge ${colorClass}">${emoji} ${value.toFixed(1)}%</span></td>`;
+    }
+
+    function renderOverallCell(value) {
+        if (value === undefined || value === null) return `<td>⚪ 0%</td>`;
+        let emoji, colorClass;
+        if (value >= 80) { emoji = '🟢'; colorClass = 'cell-green'; }
+        else if (value >= 50) { emoji = '🟡'; colorClass = 'cell-yellow'; }
+        else if (value > 0) { emoji = '🔴'; colorClass = 'cell-red'; }
+        else { emoji = '⚪'; colorClass = 'cell-grey'; }
+        return `<td><span class="cell-badge ${colorClass}">${emoji} ${value.toFixed(1)}%</span></td>`;
+    }
+
+    // Load all data after metadata is loaded
+    function loadAllData() {
+        // Load global stats
+        fetch('/api/stats/global')
+            .then(res => res.json())
+            .then(data => {
+                document.getElementById('total-count').textContent = data.total_count;
+                document.getElementById('slc-count').textContent = data.product_type_counts.SLC || 0;
+                document.getElementById('grd-count').textContent = data.product_type_counts.GRD || 0;
+                document.getElementById('ocn-count').textContent = data.product_type_counts.OCN || 0;
+            })
+            .catch(error => console.error('Error loading global stats:', error));
+
+        // Load dataset completeness table
+        fetch('/api/stats/datasets')
+            .then(res => res.json())
+            .then(data => {
+                const tableDiv = document.getElementById('dataset-table');
+                let html = '<table class="table"><thead><tr><th>Dataset</th><th>SLC</th><th>GRD</th><th>OCN</th><th>L1B A21</th><th>L1C B17</th><th>Overall</th></tr></thead><tbody>';
+                for (const [dataset, metrics] of Object.entries(data.datasets)) {
+                    const displayName = getDatasetDisplayName(dataset);
+                    html += `<tr>
+                        <td><strong>${displayName}</strong></td>
+                        ${renderCell(metrics['presence SLC'])}
+                        ${renderCell(metrics['presence GRD'])}
+                        ${renderCell(metrics['presence OCN'])}
+                        ${renderCell(metrics['presence L1B XSP A21'])}
+                        ${renderCell(metrics['presence L1C XSP B17'])}
+                        ${renderOverallCell(metrics['overall'])}
+                    </tr>`;
+                }
+                const overall = data.overall;
+                html += `<tr class="overall-row">
+                    <td><strong>Overall</strong></td>
+                    ${renderCell(overall['presence SLC'])}
+                    ${renderCell(overall['presence GRD'])}
+                    ${renderCell(overall['presence OCN'])}
+                    ${renderCell(overall['presence L1B XSP A21'])}
+                    ${renderCell(overall['presence L1C XSP B17'])}
+                    ${renderOverallCell(overall['overall'])}
+                </tr>`;
+                html += '</tbody></table>';
+                tableDiv.innerHTML = html;
+            })
+            .catch(error => console.error('Error loading dataset completeness:', error));
+
+        // Load presence bar chart with Plotly
+        fetch('/api/stats/presence')
+            .then(res => res.json())
+            .then(data => {
+                const labels = Object.keys(data);
+                const values = Object.values(data);
+                const colors = values.map(v => v >= 80 ? '#28a745' : v >= 50 ? '#ffc107' : v > 0 ? '#dc3545' : '#6c757d');
+                const trace = {
+                    x: labels.map(l => l.replace('presence ', '').replace('PATH ', '')),
+                    y: values,
+                    type: 'bar',
+                    marker: { color: colors },
+                    text: values.map(v => v.toFixed(1) + '%'),
+                    textposition: 'outside'
+                };
+                const layout = {
+                    title: 'Presence Completeness',
+                    yaxis: { title: 'Percentage', range: [0, 105] },
+                    height: 400,
+                    margin: { l: 50, r: 20, t: 40, b: 80 }
+                };
+                Plotly.newPlot('presence-chart', [trace], layout);
+            })
+            .catch(error => console.error('Error loading presence chart:', error));
+    }
+
+    // Initialize on page load
+    document.addEventListener('DOMContentLoaded', function() {
+        loadDatasetMetadata().then(() => {
+            loadAllData();
+        });
+    });
+</script>
+{% endblock %}

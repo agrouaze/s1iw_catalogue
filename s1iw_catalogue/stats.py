@@ -1,6 +1,6 @@
 """Statistics generation for the catalogue."""
 
-from typing import Any, Dict, Optional
+from typing import Any
 
 import datetime
 import json
@@ -37,18 +37,16 @@ class CatalogueStats:
 
     def dataset_membership_counts(self) -> dict[str, int]:
         """Return number of SAFE per dataset."""
-        if "dataset(s) d'appartenance" not in self.df.columns:
+        if "datasets" not in self.df.columns:
             return {}
-        exploded = self.df.explode("dataset(s) d'appartenance")
-        counts = exploded.group_by("dataset(s) d'appartenance").agg(pl.len())
-        return dict(zip(counts["dataset(s) d'appartenance"], counts["len"]))
+        exploded = self.df.explode("datasets")
+        counts = exploded.group_by("datasets").agg(pl.len())
+        return dict(zip(counts["datasets"], counts["len"]))
 
     def presence_completeness(self, dataset: str | None = None) -> dict[str, float]:
         """Compute percentages of non-null presence columns."""
         if dataset is not None:
-            filtered = self.df.filter(
-                pl.col("dataset(s) d'appartenance").list.contains(dataset)
-            )
+            filtered = self.df.filter(pl.col("datasets").list.contains(dataset))
         else:
             filtered = self.df
 
@@ -58,11 +56,11 @@ class CatalogueStats:
 
         completeness = {}
         for col in [
-            "presence SLC",
-            "presence GRD",
-            "presence OCN",
-            "presence L1B XSP A21",
-            "presence L1C XSP B17",
+            "PATH SLC",
+            "PATH GRD",
+            "PATH OCN",
+            "PATH L1B XSP A21",
+            "PATH L1C XSP B17",
         ]:
             if col in filtered.columns:
                 present = filtered.filter(pl.col(col).is_not_null()).height
@@ -116,11 +114,11 @@ class CatalogueStats:
         return self.stale_rows(days_threshold).height
 
     def satellite_counts(self) -> dict[str, int]:
-        """Return counts per satellite (unité)."""
-        if "unité" not in self.df.columns:
+        """Return counts per satellite (unit)."""
+        if "unit" not in self.df.columns:
             return {}
-        counts = self.df.group_by("unité").agg(pl.len())
-        return dict(zip(counts["unité"], counts["len"]))
+        counts = self.df.group_by("unit").agg(pl.len())
+        return dict(zip(counts["unit"], counts["len"]))
 
     def polarization_counts(self) -> dict[str, int]:
         """Return counts per polarization."""

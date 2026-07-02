@@ -12,16 +12,17 @@ def test_schema_dict_has_all_columns():
         "SAFE SLC",
         "SAFE GRD",
         "SAFE OCN",
-        "presence SLC",
-        "presence GRD",
-        "presence OCN",
-        "presence L1B XSP A21",
-        "presence L1C XSP B17",
-        "dataset(s) d'appartenance",
+        "PATH SLC",
+        "PATH GRD",
+        "PATH OCN",
+        "PATH L1B XSP A21",
+        "PATH L1C XSP B17",
+        "datasets",
+        "category",
         "Hs WW3",
         "Tp WW3",
         "U10 ecmwf",
-        "v10 ecmwf",
+        "V10 ecmwf",
         "start date SAFE",
         "horodating",
         "polygon SLC",  # <-- changed from "polygon of the acquisition from CDSE"
@@ -29,7 +30,7 @@ def test_schema_dict_has_all_columns():
         "S3path SLC",  # <-- changed from "S3path from CDSE"
         "S3path GRD",  # <-- changed from "S3path from CDSE"
         "polarization",
-        "unité",
+        "unit",
     ]
     assert set(schema.SCHEMA.keys()) == set(expected_columns)
 
