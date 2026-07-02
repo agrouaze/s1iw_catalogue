@@ -146,3 +146,27 @@ async def get_presence_stats() -> dict[str, float]:
             result[col] = round((present / total * 100) if total > 0 else 0.0, 1)
 
     return result
+
+
+# ---------- NEW ENDPOINT ----------
+@router.get("/datasets_metadata")
+async def get_datasets_metadata() -> dict[str, Any]:
+    """
+    Get dataset metadata (description, category, type) from the config file.
+
+    Returns:
+        dict: Mapping of dataset_name -> {"description": str, "category": str, "type": str}
+    """
+    metadata = catalogue_manager.get_dataset_metadata()
+
+    if metadata is None:
+        raise HTTPException(
+            status_code=503,
+            detail="Dataset metadata not loaded. Please ensure S1IW_CONFIG_PATH is set."
+        )
+
+    return {
+        "metadata": metadata,
+        "count": len(metadata),
+        "dataset_names": list(metadata.keys()),
+    }

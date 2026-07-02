@@ -30,10 +30,7 @@
             <div class="filter-group">
                 <label class="filter-label"><span class="icon">📁</span> Dataset</label>
                 <select id="dataset-filter" multiple>
-                    <option value="hibou2">hibou2</option>
-                    <option value="castor5">castor5</option>
-                    <option value="zebra">zebra</option>
-                    <option value="lion">lion</option>
+                    <!-- Options will be populated dynamically -->
                 </select>
             </div>
         </div>
@@ -112,6 +109,53 @@
 <script>
     let currentPage = 0;
     const pageSize = 100;
+    let datasetMetadata = {};  // Store dataset metadata globally
+
+    // Load dataset metadata on page load
+    function loadDatasetMetadata() {
+        return fetch('/api/stats/datasets_metadata')
+            .then(response => {
+                if (!response.ok) {
+                    throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+                }
+                return response.json();
+            })
+            .then(data => {
+                datasetMetadata = data.metadata || {};
+                populateDatasetFilter(datasetMetadata);
+                return datasetMetadata;
+            })
+            .catch(error => {
+                console.error('Error loading dataset metadata:', error);
+                // Fallback: show a message in the filter
+                const select = document.getElementById('dataset-filter');
+                if (select) {
+                    select.innerHTML = '<option value="" disabled>Error loading datasets</option>';
+                }
+                return {};
+            });
+    }
+
+    // Populate the dataset filter dropdown
+    function populateDatasetFilter(metadata) {
+        const select = document.getElementById('dataset-filter');
+        if (!select) return;
+
+        const datasetNames = Object.keys(metadata);
+        if (datasetNames.length === 0) {
+            select.innerHTML = '<option value="" disabled>No datasets found</option>';
+            return;
+        }
+
+        let html = '';
+        datasetNames.forEach(name => {
+            const desc = metadata[name]?.description || '';
+            const category = metadata[name]?.category || '';
+            const label = desc ? `${name} (${desc})` : name;
+            html += `<option value="${name}">${label}</option>`;
+        });
+        select.innerHTML = html;
+    }
 
     function getFilterState() {
         const datasetSelect = document.getElementById('dataset-filter');
@@ -162,10 +206,15 @@
             } else {
                 rows.forEach(row => {
                     const datasets = row['dataset(s) d\'appartenance'] || [];
+                    // Map dataset names to display names with descriptions
+                    const displayDatasets = datasets.map(ds => {
+                        const desc = datasetMetadata[ds]?.description || '';
+                        return desc ? `${ds} (${desc})` : ds;
+                    });
                     html += `<tr>
                         <td>${row['SAFE SLC'] || ''}</td>
                         <td>${row['SAFE GRD'] || ''}</td>
-                        <td>${datasets.join(', ')}</td>
+                        <td>${displayDatasets.join(', ')}</td>
                         <td>${row['start date SAFE'] || ''}</td>
                         <td>${row['polarization'] || ''}</td>
                         <td>${row['unité'] || ''}</td>
@@ -235,8 +284,14 @@
                 return;
             }
 
+            // Use display names with descriptions for labels
+            const displayLabels = labels.map(ds => {
+                const desc = datasetMetadata[ds]?.description || '';
+                return desc ? `${ds} (${desc})` : ds;
+            });
+
             const trace = {
-                x: labels,
+                x: displayLabels,
                 y: values,
                 type: 'bar',
                 marker: {
@@ -458,60 +513,63 @@
 
     // Event listeners - SINGLE SET
     document.addEventListener('DOMContentLoaded', function() {
-        const filterForm = document.getElementById('filter-form');
-        const resetBtn = filterForm?.querySelector('button[type="reset"]');
-        const prevBtn = document.getElementById('prev-page');
-        const nextBtn = document.getElementById('next-page');
+        // First load dataset metadata, then initialize
+        loadDatasetMetadata().then(() => {
+            const filterForm = document.getElementById('filter-form');
+            const resetBtn = filterForm?.querySelector('button[type="reset"]');
+            const prevBtn = document.getElementById('prev-page');
+            const nextBtn = document.getElementById('next-page');
 
-        if (filterForm) {
-            filterForm.addEventListener('submit', function(e) {
-                e.preventDefault();
-                currentPage = 0;
-                const filters = getFilterState();
-                updateResultsTable(filters);
-                updateDatasetBarChart(filters);
-                updateHsTpHeatmap(filters);
-                updateMap(filters);
-            });
-        }
-
-        if (resetBtn) {
-            resetBtn.addEventListener('click', function(e) {
-                e.preventDefault();
-                filterForm?.reset();
-                currentPage = 0;
-                const filters = getFilterState();
-                updateResultsTable(filters);
-                updateDatasetBarChart(filters);
-                updateHsTpHeatmap(filters);
-                updateMap(filters);
-            });
-        }
-
-        if (prevBtn) {
-            prevBtn.addEventListener('click', function() {
-                if (currentPage > 0) {
-                    currentPage--;
+            if (filterForm) {
+                filterForm.addEventListener('submit', function(e) {
+                    e.preventDefault();
+                    currentPage = 0;
                     const filters = getFilterState();
                     updateResultsTable(filters);
-                }
-            });
-        }
+                    updateDatasetBarChart(filters);
+                    updateHsTpHeatmap(filters);
+                    updateMap(filters);
+                });
+            }
 
-        if (nextBtn) {
-            nextBtn.addEventListener('click', function() {
-                currentPage++;
-                const filters = getFilterState();
-                updateResultsTable(filters);
-            });
-        }
+            if (resetBtn) {
+                resetBtn.addEventListener('click', function(e) {
+                    e.preventDefault();
+                    filterForm?.reset();
+                    currentPage = 0;
+                    const filters = getFilterState();
+                    updateResultsTable(filters);
+                    updateDatasetBarChart(filters);
+                    updateHsTpHeatmap(filters);
+                    updateMap(filters);
+                });
+            }
 
-        // Initial load
-        const initialFilters = getFilterState();
-        updateResultsTable(initialFilters);
-        updateDatasetBarChart(initialFilters);
-        updateHsTpHeatmap(initialFilters);
-        updateMap(initialFilters);
+            if (prevBtn) {
+                prevBtn.addEventListener('click', function() {
+                    if (currentPage > 0) {
+                        currentPage--;
+                        const filters = getFilterState();
+                        updateResultsTable(filters);
+                    }
+                });
+            }
+
+            if (nextBtn) {
+                nextBtn.addEventListener('click', function() {
+                    currentPage++;
+                    const filters = getFilterState();
+                    updateResultsTable(filters);
+                });
+            }
+
+            // Initial load
+            const initialFilters = getFilterState();
+            updateResultsTable(initialFilters);
+            updateDatasetBarChart(initialFilters);
+            updateHsTpHeatmap(initialFilters);
+            updateMap(initialFilters);
+        });
     });
 </script>
 {% endblock %}

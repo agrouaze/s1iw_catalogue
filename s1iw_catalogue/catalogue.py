@@ -249,6 +249,36 @@ class S1IWCatalogue:
     def get_centroids(self) -> pl.DataFrame:
         return create_empty_catalogue()
 
+    # ---------- NEW METHODS ----------
+    def get_dataset_metadata(self) -> dict[str, dict]:
+        """
+        Return dataset metadata (description, category, type) from the config file.
+
+        Returns:
+            dict: Mapping of dataset_name -> {"description": str, "category": str, "type": str}
+        """
+        reference_listings = self._config.get("paths", {}).get("reference_listings", {})
+        metadata = {}
+        for name, info in reference_listings.items():
+            if isinstance(info, dict):
+                metadata[name] = {
+                    "description": info.get("description", ""),
+                    "category": info.get("category", "undefined"),
+                    "type": info.get("type", ""),
+                }
+            else:
+                # Old format: just a path string
+                metadata[name] = {
+                    "description": "",
+                    "category": "undefined",
+                    "type": "",
+                }
+        return metadata
+
+    def get_config_path(self) -> Path | None:
+        """Return the path to the config file used for this catalogue."""
+        return self._config_path
+
     def _load_catalogue(self) -> pl.DataFrame:
         """Load the catalogue from the stored path."""
         if not self._catalogue_path.exists():

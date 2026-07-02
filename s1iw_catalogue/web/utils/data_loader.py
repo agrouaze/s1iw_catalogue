@@ -2,6 +2,7 @@
 
 import logging
 from pathlib import Path
+from typing import Any
 
 import polars as pl
 
@@ -14,6 +15,7 @@ class CatalogueManager:
     def __init__(self):
         self._df: pl.DataFrame | None = None
         self._path: Path | None = None
+        self._dataset_metadata: dict[str, dict] | None = None
 
     def load(self, path: Path) -> None:
         """Load catalogue from parquet file."""
@@ -29,10 +31,34 @@ class CatalogueManager:
         """Clear loaded catalogue."""
         self._df = None
         self._path = None
+        self._dataset_metadata = None
 
     def is_loaded(self) -> bool:
         """Check if catalogue is loaded."""
         return self._df is not None
+
+    def set_dataset_metadata(self, metadata: dict[str, dict]) -> None:
+        """
+        Store dataset metadata (description, category, type) from the config file.
+
+        Args:
+            metadata: Mapping of dataset_name -> {"description": str, "category": str, "type": str}
+        """
+        self._dataset_metadata = metadata
+        logger.info(f"Stored metadata for {len(metadata)} datasets")
+
+    def get_dataset_metadata(self) -> dict[str, dict] | None:
+        """
+        Get the dataset metadata.
+
+        Returns:
+            dict or None: Mapping of dataset_name -> metadata, or None if not loaded.
+        """
+        return self._dataset_metadata
+
+    def has_dataset_metadata(self) -> bool:
+        """Check if dataset metadata is loaded."""
+        return self._dataset_metadata is not None
 
     @property
     def df(self) -> pl.DataFrame:

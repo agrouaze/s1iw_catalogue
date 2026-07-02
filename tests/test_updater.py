@@ -625,74 +625,107 @@ class TestUpdateDerivedProducts:
 class TestLinkOcnToGrd:
     """Tests for _link_ocn_to_grd."""
 
-    def test_link_ocn_to_grd_found(self, updater):
-        """Test that _link_ocn_to_grd correctly sets SAFE OCN when found."""
-        with patch.object(
-            CatalogueUpdater, "_call_cdse_get_ocn_from_grd", return_value="OCN1"
-        ) as mock_ocn:
-            df = pl.DataFrame(
-                {
-                    "SAFE SLC": [None],
-                    "SAFE GRD": ["GRD1"],
-                    "SAFE OCN": [None],
-                    "PATH SLC": [None],
-                    "PATH GRD": [None],
-                    "PATH OCN": [None],
-                    "PATH L1B XSP A21": [None],
-                    "PATH L1C XSP B17": [None],
-                    "datasets": [[]],
-                    "category": [None],
-                    "Hs WW3": [None],
-                    "Tp WW3": [None],
-                    "U10 ecmwf": [None],
-                    "V10 ecmwf": [None],  # <-- capital V
-                    "start date SAFE": [datetime.datetime(2025, 1, 1)],
-                    "horodating": [datetime.datetime(2025, 1, 1)],
-                    "polygon SLC": [None],
-                    "polygon GRD": [None],
-                    "S3path SLC": [None],
-                    "S3path GRD": [None],
-                    "polarization": ["1SDV"],
-                    "unit": ["S1A"],
-                },
-                schema=SCHEMA,
-            )
-            result = updater._link_ocn_to_grd(df)
-            assert result["SAFE OCN"][0] == "OCN1"
-            mock_ocn.assert_called_once_with("GRD1", None)
+    @patch.object(CatalogueUpdater, "_batch_cdse_match")
+    def test_link_ocn_to_grd_found(self, mock_batch: MagicMock, updater: CatalogueUpdater) -> None:
+        """Test successful OCN linking via batch match."""
+        mock_batch.return_value = {"GRD1": "OCN1"}
+        grd_name = "GRD1"
+        data = {
+            "SAFE SLC": [None],
+            "SAFE GRD": [grd_name],
+            "SAFE OCN": [None],
+            "presence SLC": [None],
+            "presence GRD": [None],
+            "presence OCN": [None],
+            "presence L1B XSP A21": [None],
+            "presence L1C XSP B17": [None],
+            "dataset(s) d'appartenance": [[]],
+            "dataset_category": [None],
+            "Hs WW3": [None],
+            "Tp WW3": [None],
+            "U10 ecmwf": [None],
+            "V10 ecmwf": [None],
+            "start date SAFE": [datetime.datetime(2025, 1, 1)],
+            "horodating": [datetime.datetime(2025, 1, 1)],
+            "polygon SLC": [None],
+            "polygon GRD": [None],
+            "S3path SLC": [None],
+            "S3path GRD": [None],
+            "polarization": ["1SDV"],
+            "unit": ["S1A"],
+        }
+        df = pl.DataFrame(data, schema=SCHEMA)
+        result = updater._link_ocn_to_grd(df)
+        
+        assert result["SAFE OCN"][0] == "OCN1"
+        mock_batch.assert_called_once_with([grd_name], "OCN_")
 
-    def test_link_ocn_to_grd_not_found_marked(self, updater):
-        """Test that _link_ocn_to_grd marks SAFE OCN as NOT_FOUND when no OCN exists."""
-        with patch.object(
-            CatalogueUpdater, "_call_cdse_get_ocn_from_grd", return_value=None
-        ) as mock_ocn:
-            df = pl.DataFrame(
-                {
-                    "SAFE SLC": [None],
-                    "SAFE GRD": ["GRD1"],
-                    "SAFE OCN": [None],
-                    "PATH SLC": [None],
-                    "PATH GRD": [None],
-                    "PATH OCN": [None],
-                    "PATH L1B XSP A21": [None],
-                    "PATH L1C XSP B17": [None],
-                    "datasets": [[]],
-                    "category": [None],
-                    "Hs WW3": [None],
-                    "Tp WW3": [None],
-                    "U10 ecmwf": [None],
-                    "V10 ecmwf": [None],
-                    "start date SAFE": [datetime.datetime(2025, 1, 1)],
-                    "horodating": [datetime.datetime(2025, 1, 1)],
-                    "polygon SLC": [None],
-                    "polygon GRD": [None],
-                    "S3path SLC": [None],
-                    "S3path GRD": [None],
-                    "polarization": ["1SDV"],
-                    "unit": ["S1A"],
-                },
-                schema=SCHEMA,
-            )
-            result = updater._link_ocn_to_grd(df)
-            assert result["SAFE OCN"][0] == "NOT_FOUND"
-            mock_ocn.assert_called_once_with("GRD1", None)
+    @patch.object(CatalogueUpdater, "_batch_cdse_match")
+    def test_link_ocn_to_grd_not_found_marked(self, mock_batch: MagicMock, updater: CatalogueUpdater) -> None:
+        """Test OCN marked as NOT_FOUND when CDSE returns empty mapping."""
+        mock_batch.return_value = {}  # Simulate OCN not found
+        grd_name = "GRD1"
+        data = {
+            "SAFE SLC": [None],
+            "SAFE GRD": [grd_name],
+            "SAFE OCN": [None],
+            "presence SLC": [None],
+            "presence GRD": [None],
+            "presence OCN": [None],
+            "presence L1B XSP A21": [None],
+            "presence L1C XSP B17": [None],
+            "dataset(s) d'appartenance": [[]],
+            "dataset_category": [None],
+            "Hs WW3": [None],
+            "Tp WW3": [None],
+            "U10 ecmwf": [None],
+            "V10 ecmwf": [None],
+            "start date SAFE": [datetime.datetime(2025, 1, 1)],
+            "horodating": [datetime.datetime(2025, 1, 1)],
+            "polygon SLC": [None],
+            "polygon GRD": [None],
+            "S3path SLC": [None],
+            "S3path GRD": [None],
+            "polarization": ["1SDV"],
+            "unit": ["S1A"],
+        }
+        df = pl.DataFrame(data, schema=SCHEMA)
+        result = updater._link_ocn_to_grd(df)
+        
+        assert result["SAFE OCN"][0] == "NOT_FOUND"
+        mock_batch.assert_called_once()
+
+    @patch.object(CatalogueUpdater, "_batch_cdse_match")
+    def test_link_ocn_to_grd_already_linked(self, mock_batch: MagicMock, updater: CatalogueUpdater) -> None:
+        """Test that GRD with an existing OCN is skipped."""
+        mock_batch.return_value = {"SHOULD_NOT_BE_CALLED": "OCN1"}
+        grd_name = "GRD1"
+        data = {
+            "SAFE SLC": [None],
+            "SAFE GRD": [grd_name],
+            "SAFE OCN": ["ALREADY_EXISTS"],  # OCN already here
+            "presence SLC": [None],
+            "presence GRD": [None],
+            "presence OCN": [None],
+            "presence L1B XSP A21": [None],
+            "presence L1C XSP B17": [None],
+            "dataset(s) d'appartenance": [[]],
+            "dataset_category": [None],
+            "Hs WW3": [None],
+            "Tp WW3": [None],
+            "U10 ecmwf": [None],
+            "V10 ecmwf": [None],
+            "start date SAFE": [datetime.datetime(2025, 1, 1)],
+            "horodating": [datetime.datetime(2025, 1, 1)],
+            "polygon SLC": [None],
+            "polygon GRD": [None],
+            "S3path SLC": [None],
+            "S3path GRD": [None],
+            "polarization": ["1SDV"],
+            "unit": ["S1A"],
+        }
+        df = pl.DataFrame(data, schema=SCHEMA)
+        result = updater._link_ocn_to_grd(df)
+        
+        assert result["SAFE OCN"][0] == "ALREADY_EXISTS"
+        mock_batch.assert_not_called()

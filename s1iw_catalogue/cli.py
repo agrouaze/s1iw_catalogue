@@ -16,6 +16,9 @@ logging.basicConfig(
 )
 
 
+# =============================================================================
+# MAIN GROUP
+# =============================================================================
 @click.group()
 @click.option(
     "--config", "-c", type=click.Path(exists=True), help="Path to configuration file."
@@ -24,12 +27,14 @@ logging.basicConfig(
 def main(ctx: click.Context, config: Path | None) -> None:
     """s1iw_catalogue – Exhaustive catalogue of Sentinel-1 IW SAFE products."""
     ctx.ensure_object(dict)
-    # Load configuration once and store in context
     cfg = load_config(config_path=config)
     ctx.obj["config"] = cfg
-    ctx.obj["config_path"] = config  # store the path for metadata
+    ctx.obj["config_path"] = config
 
 
+# =============================================================================
+# COMMAND: create
+# =============================================================================
 @main.command()
 @click.option(
     "--output",
@@ -41,16 +46,23 @@ def main(ctx: click.Context, config: Path | None) -> None:
 @click.option(
     "--listing",
     "-l",
-    help="Name of a single dataset/listing from the config file to use (e.g., ciaran2023). If omitted, all listings are used.",
+    help=(
+        "Name of a single dataset/listing from the config file to use "
+        "(e.g., ciaran2023). If omitted, all listings are used."
+    ),
 )
 @click.pass_context
 def create(ctx: click.Context, output: Path, listing: str | None) -> None:
-    """Create a brand new catalogue from scratch."""
+    """
+    Create a brand new catalogue from scratch.
+
+    If --listing is provided, only that dataset is used; otherwise all
+    listings from the config are processed.
+    """
     cfg = ctx.obj["config"]
     config_path = ctx.obj.get("config_path")
     cat = S1IWCatalogue(catalogue_path=output, config=cfg, config_path=config_path)
 
-    # If a listing name is provided, filter reference_listings to only that key
     if listing:
         reference_listings = cfg.get("paths", {}).get("reference_listings", {})
         if listing not in reference_listings:
@@ -58,12 +70,10 @@ def create(ctx: click.Context, output: Path, listing: str | None) -> None:
                 f"Error: Listing '{listing}' not found in configuration.", err=True
             )
             raise click.Abort()
-        # Create a filtered config dict that only contains that listing
         filtered_config = cfg.copy()
         filtered_config["paths"] = {
             "reference_listings": {listing: reference_listings[listing]}
         }
-        # Recreate the catalogue with the filtered config
         cat = S1IWCatalogue(
             catalogue_path=output, config=filtered_config, config_path=config_path
         )
@@ -72,6 +82,9 @@ def create(ctx: click.Context, output: Path, listing: str | None) -> None:
     click.echo("Done.")
 
 
+# =============================================================================
+# COMMAND: update
+# =============================================================================
 @main.command()
 @click.option(
     "--catalogue",
@@ -87,7 +100,7 @@ def create(ctx: click.Context, output: Path, listing: str | None) -> None:
 )
 @click.pass_context
 def update(ctx: click.Context, catalogue: Path, force_meteo: bool) -> None:
-    """Incrementally update the catalogue."""
+    """Incrementally update an existing catalogue."""
     cfg = ctx.obj["config"]
     config_path = ctx.obj.get("config_path")
     cat = S1IWCatalogue(catalogue_path=catalogue, config=cfg, config_path=config_path)
@@ -96,6 +109,9 @@ def update(ctx: click.Context, catalogue: Path, force_meteo: bool) -> None:
     click.echo("Done.")
 
 
+# =============================================================================
+# COMMAND: stats
+# =============================================================================
 @main.command()
 @click.option(
     "--catalogue",
@@ -135,7 +151,6 @@ def stats(
         stats_obj.to_json(output)
         click.echo(f"Statistics written to {output}")
     else:
-        # Print the summary string
         click.echo(stats_obj.to_string())
 
         if verbose:
@@ -153,6 +168,9 @@ def stats(
             click.echo(df.select(sample_cols).head(5))
 
 
+# =============================================================================
+# COMMAND: backup
+# =============================================================================
 @main.command()
 @click.option(
     "--catalogue",
@@ -173,6 +191,9 @@ def backup(ctx: click.Context, catalogue: Path, backup_dir: Path | None) -> None
     click.echo(f"Backup created: {backup_path}")
 
 
+# =============================================================================
+# COMMAND: query
+# =============================================================================
 @main.command()
 @click.option(
     "--catalogue",
@@ -198,6 +219,9 @@ def query(ctx: click.Context, catalogue: Path, safe_name: str) -> None:
             click.echo(f"  {key}: {value}")
 
 
+# =============================================================================
+# COMMAND: serve
+# =============================================================================
 @main.command()
 @click.option("--host", default="127.0.0.1", help="Host to bind the web server to.")
 @click.option("--port", default=8649, type=int, help="Port to bind the web server to.")
@@ -217,10 +241,22 @@ def serve(
     catalogue: Path,
     reload: bool,
 ) -> None:
-    """Launch web interface to explore the catalogue."""
+    """
+    Launch the web interface to explore the catalogue.
+
+    Dataset metadata (names and descriptions) is loaded from the config file
+    if available via --config.
+    """
     import os
 
     os.environ["S1IW_CATALOGUE_PATH"] = str(catalogue)
+
+    config_path = ctx.obj.get("config_path")
+    if config_path:
+        os.environ["S1IW_CONFIG_PATH"] = str(config_path)
+        click.echo(f"📁 Using config: {config_path}")
+    else:
+        click.echo("⚠️  No config path provided. Dataset metadata will be unavailable.")
 
     click.echo(f"🚀 Starting web server at http://{host}:{port}")
     click.echo(f"📁 Serving catalogue: {catalogue}")
@@ -238,6 +274,9 @@ def serve(
     )
 
 
+# =============================================================================
+# COMMAND: merge
+# =============================================================================
 @main.command()
 @click.argument(
     "catalogues",
@@ -254,7 +293,8 @@ def serve(
 )
 @click.pass_context
 def merge(ctx: click.Context, catalogues: tuple[Path], output: Path) -> None:
-    """Merge multiple catalogues into a single file.
+    """
+    Merge multiple catalogues into a single file.
 
     CATALOGUES: list of input .parquet files to merge (at least 2).
     """
@@ -268,5 +308,8 @@ def merge(ctx: click.Context, catalogues: tuple[Path], output: Path) -> None:
     click.echo(f"Merged {len(catalogues)} catalogues into {output}")
 
 
+# =============================================================================
+# ENTRY POINT
+# =============================================================================
 if __name__ == "__main__":
     main()

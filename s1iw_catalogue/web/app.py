@@ -15,11 +15,35 @@ from s1iw_catalogue.web.utils.data_loader import catalogue_manager
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Lifespan context manager for startup/shutdown events."""
+    """
+    Lifespan context manager for startup/shutdown events.
+
+    Loads the catalogue and its dataset metadata from the config file.
+    """
     catalogue_path = os.environ.get("S1IW_CATALOGUE_PATH")
+    config_path = os.environ.get("S1IW_CONFIG_PATH")
+
     if catalogue_path:
         catalogue_manager.load(Path(catalogue_path))
         print(f"Loaded catalogue: {catalogue_path}")
+
+        # Load dataset metadata if config path is provided
+        if config_path:
+            try:
+                from s1iw_catalogue.catalogue import S1IWCatalogue
+
+                cat = S1IWCatalogue(
+                    catalogue_path=Path(catalogue_path),
+                    config_path=Path(config_path),
+                )
+                dataset_metadata = cat.get_dataset_metadata()
+                catalogue_manager.set_dataset_metadata(dataset_metadata)
+                print(f"Loaded dataset metadata from: {config_path}")
+                print(f"  Datasets found: {list(dataset_metadata.keys())}")
+            except Exception as e:
+                print(f"Warning: Could not load dataset metadata: {e}")
+        else:
+            print("Warning: S1IW_CONFIG_PATH not set. Dataset metadata unavailable.")
     else:
         print("Warning: S1IW_CATALOGUE_PATH not set. Use --catalogue flag.")
 
@@ -81,4 +105,6 @@ async def health():
             str(catalogue_manager.path) if catalogue_manager.path else None
         ),
         "row_count": catalogue_manager.row_count(),
+        "dataset_metadata_loaded": catalogue_manager.has_dataset_metadata(),
+        "dataset_count": len(catalogue_manager.get_dataset_metadata() or {}),
     }
