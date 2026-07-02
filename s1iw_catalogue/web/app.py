@@ -11,7 +11,8 @@ from fastapi.staticfiles import StaticFiles
 from s1iw_catalogue.web.routes import browse, stats
 from s1iw_catalogue.web.template_engine import get_templates
 from s1iw_catalogue.web.utils.data_loader import catalogue_manager
-
+import logging
+logging.getLogger("s1iw_catalogue.catalogue").setLevel(logging.DEBUG)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):

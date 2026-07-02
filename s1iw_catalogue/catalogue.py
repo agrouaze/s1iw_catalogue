@@ -250,42 +250,35 @@ class S1IWCatalogue:
         return create_empty_catalogue()
 
     # ---------- NEW METHODS ----------
+
     def get_dataset_metadata(self) -> dict[str, dict]:
         """
         Return dataset metadata (description, category, type) from the config file.
-
-        Supports flat structure where keys are dataset names:
-        reference_listings:
-        dataset_name_1:
-            path: "..."
-            type: "slc"
-            description: "..."
-            category: "..."
-        dataset_name_2:
-            path: "..."
-            type: "grd"
-            description: "..."
-            category: "..."
         """
         reference_listings = self._config.get("paths", {}).get("reference_listings", {})
+        
+        # Debug logging
+        logger.debug(f"reference_listings keys: {list(reference_listings.keys())}")
+        
         metadata = {}
-
         for dataset_name, dataset_info in reference_listings.items():
-            logger.debug(f"Processing dataset entry: {dataset_name} -> {dataset_info}")
+            logger.debug(f"Processing '{dataset_name}' -> type: {type(dataset_info)}")
+            
             if not isinstance(dataset_info, dict):
+                logger.debug(f"Skipping '{dataset_name}' - not a dict")
                 continue
 
-            # Check if this is a dataset entry (has 'path' key)
             if "path" in dataset_info:
+                logger.debug(f"Found dataset '{dataset_name}' with path: {dataset_info.get('path')}")
                 metadata[dataset_name] = {
                     "description": dataset_info.get("description", ""),
                     "category": dataset_info.get("category", "undefined"),
                     "type": dataset_info.get("type", ""),
                 }
             else:
-                # Skip if it's not a dataset entry (e.g., old format with nested slc/grd)
-                logger.debug(f"Skipping non-dataset entry: {dataset_name}")
+                logger.debug(f"Skipping '{dataset_name}' - no 'path' key. Keys: {list(dataset_info.keys())}")
 
+        logger.debug(f"Found {len(metadata)} datasets")
         return metadata
 
     def get_config_path(self) -> Path | None:
