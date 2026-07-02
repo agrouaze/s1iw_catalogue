@@ -18,8 +18,8 @@ import pandas as pd
 import polars as pl
 
 from s1iw_catalogue.config import load_config
-from s1iw_catalogue.schema import ECMWF_COLUMNS, SCHEMA, WW3_COLUMNS
 from s1iw_catalogue.ecmwf_extractor import add_ecmwf_to_catalogue
+from s1iw_catalogue.schema import ECMWF_COLUMNS, SCHEMA, WW3_COLUMNS
 from s1iw_catalogue.ww3_extractor import add_ww3_to_catalogue
 
 # Set up module-level logger
@@ -104,7 +104,7 @@ class CatalogueUpdater:
             "start_date": start_date,
             "end_date": end_date,
         }
-    
+
     def update_with_ecmwf(
         self,
         catalogue_df: pl.DataFrame | pd.DataFrame,
@@ -199,7 +199,7 @@ class CatalogueUpdater:
         if is_polars:
             return result_df
         return result_df.to_pandas()
-    
+
     def update_with_ww3(
         self,
         catalogue_df,
@@ -594,7 +594,7 @@ class CatalogueUpdater:
         combined = pl.concat([slc_df, grd_df], how="vertical_relaxed").unique()
         logger.info(f"Total combined catalogue rows (before dedup): {combined.height}")
         return combined
-    
+
     @staticmethod
     def _get_peak_memory_gb() -> float:
         """
@@ -608,11 +608,11 @@ class CatalogueUpdater:
         """
         try:
             # Linux specific: read Peak Resident Set Size (VmHWM)
-            with open("/proc/self/status", "r", encoding="utf-8") as f:
+            with open("/proc/self/status", encoding="utf-8") as f:
                 for line in f:
                     if line.startswith("VmHWM:"):
                         # Value is in kB, convert to GB
-                        return int(line.split()[1]) / (1024 ** 2)
+                        return int(line.split()[1]) / (1024**2)
         except FileNotFoundError:
             pass
         return 0.0
@@ -723,7 +723,6 @@ class CatalogueUpdater:
             logger.info(f"🧠 Peak memory consumption: {peak_mem_gb:.2f} Go")
         logger.info(f"📊 Final catalogue shape: {df.shape}")
         logger.info("=" * 60)
-
 
         return df
 
@@ -2171,24 +2170,28 @@ class CatalogueUpdater:
             logger.info("All GRD products already have OCN linked (or checked).")
             return df
 
-        logger.info(f"Attempting to link OCN for {to_query.height} GRD products via batch...")
-        
+        logger.info(
+            f"Attempting to link OCN for {to_query.height} GRD products via batch..."
+        )
+
         grd_ids = to_query["SAFE GRD"].to_list()
         mapping_grd_to_ocn = self._batch_cdse_match(grd_ids, "OCN_")
-        
+
         found_ocn_ids = set(mapping_grd_to_ocn.keys())
-        
+
         # 1. Appliquer les succès via un JOIN
         if mapping_grd_to_ocn:
-            map_df = pl.DataFrame({
-                "SAFE GRD": list(mapping_grd_to_ocn.keys()),
-                "OCN_MATCH": list(mapping_grd_to_ocn.values())
-            })
+            map_df = pl.DataFrame(
+                {
+                    "SAFE GRD": list(mapping_grd_to_ocn.keys()),
+                    "OCN_MATCH": list(mapping_grd_to_ocn.values()),
+                }
+            )
             df = df.join(map_df, on="SAFE GRD", how="left")
             df = df.with_columns(
                 pl.coalesce([pl.col("OCN_MATCH"), pl.col("SAFE OCN")]).alias("SAFE OCN")
             ).drop("OCN_MATCH")
-            
+
         # 2. Marquer les échecs comme "NOT_FOUND"
         failed_ids = [gid for gid in grd_ids if gid not in found_ocn_ids]
         if failed_ids:
@@ -2198,7 +2201,9 @@ class CatalogueUpdater:
                 .otherwise(pl.col("SAFE OCN"))
                 .alias("SAFE OCN")
             )
-            logger.warning(f"CDSE could not find OCN for {len(failed_ids)} GRD products.")
+            logger.warning(
+                f"CDSE could not find OCN for {len(failed_ids)} GRD products."
+            )
 
         logger.info(f"Linked OCN to {len(mapping_grd_to_ocn)} GRD products.")
         return df
@@ -2233,24 +2238,28 @@ class CatalogueUpdater:
             logger.info("All SLC products already have OCN linked via GRD or checked.")
             return df
 
-        logger.info(f"Attempting to link OCN for {to_query.height} SLC products via batch...")
-        
+        logger.info(
+            f"Attempting to link OCN for {to_query.height} SLC products via batch..."
+        )
+
         slc_ids = to_query["SAFE SLC"].to_list()
         mapping_slc_to_ocn = self._batch_cdse_match(slc_ids, "OCN_")
-        
+
         found_ocn_ids = set(mapping_slc_to_ocn.keys())
-        
+
         # 1. Appliquer les succès via un JOIN
         if mapping_slc_to_ocn:
-            map_df = pl.DataFrame({
-                "SAFE SLC": list(mapping_slc_to_ocn.keys()),
-                "OCN_MATCH": list(mapping_slc_to_ocn.values())
-            })
+            map_df = pl.DataFrame(
+                {
+                    "SAFE SLC": list(mapping_slc_to_ocn.keys()),
+                    "OCN_MATCH": list(mapping_slc_to_ocn.values()),
+                }
+            )
             df = df.join(map_df, on="SAFE SLC", how="left")
             df = df.with_columns(
                 pl.coalesce([pl.col("OCN_MATCH"), pl.col("SAFE OCN")]).alias("SAFE OCN")
             ).drop("OCN_MATCH")
-            
+
         # 2. Marquer les échecs comme "NOT_FOUND"
         failed_ids = [sid for sid in slc_ids if sid not in found_ocn_ids]
         if failed_ids:
@@ -2260,7 +2269,9 @@ class CatalogueUpdater:
                 .otherwise(pl.col("SAFE OCN"))
                 .alias("SAFE OCN")
             )
-            logger.warning(f"CDSE could not find OCN for {len(failed_ids)} SLC products.")
+            logger.warning(
+                f"CDSE could not find OCN for {len(failed_ids)} SLC products."
+            )
 
         logger.info(f"Linked OCN to {len(mapping_slc_to_ocn)} SLC products.")
         return df

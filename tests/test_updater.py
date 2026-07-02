@@ -622,17 +622,13 @@ class TestUpdateDerivedProducts:
         assert result["PATH L1B XSP A21"][0] == "/path/to/a21"
 
 
-
-
 class TestLinkOcnToGrd:
     """Tests for _link_ocn_to_grd."""
 
     def test_link_ocn_to_grd_found(self, updater):
         """Test that _link_ocn_to_grd correctly sets SAFE OCN when found."""
         with patch.object(
-            CatalogueUpdater,
-            "_call_cdse_get_ocn_from_grd",
-            return_value="OCN1"
+            CatalogueUpdater, "_call_cdse_get_ocn_from_grd", return_value="OCN1"
         ) as mock_ocn:
             df = pl.DataFrame(
                 {
@@ -668,9 +664,7 @@ class TestLinkOcnToGrd:
     def test_link_ocn_to_grd_not_found_marked(self, updater):
         """Test that _link_ocn_to_grd marks SAFE OCN as NOT_FOUND when no OCN exists."""
         with patch.object(
-            CatalogueUpdater,
-            "_call_cdse_get_ocn_from_grd",
-            return_value=None
+            CatalogueUpdater, "_call_cdse_get_ocn_from_grd", return_value=None
         ) as mock_ocn:
             df = pl.DataFrame(
                 {

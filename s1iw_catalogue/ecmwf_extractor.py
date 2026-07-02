@@ -6,12 +6,13 @@ Handles two distinct archives: Primary (0.1°, hourly) and Fallback (0.125°, 3-
 
 from __future__ import annotations
 
+from typing import Any, Union
+
 import logging
 import os
 import time
 import warnings
 from functools import wraps
-from typing import Any, Union
 
 import numpy as np
 import pandas as pd
@@ -64,7 +65,7 @@ except ImportError:
                     break
         if not config_path or not os.path.exists(config_path):
             raise FileNotFoundError("Config file not found")
-        with open(config_path, "r", encoding="utf-8") as f:
+        with open(config_path, encoding="utf-8") as f:
             return yaml.safe_load(f)
 
 
@@ -200,12 +201,12 @@ class ECMWFExtractor:
             lons = ds[lon_name].values
             lats = ds[lat_name].values
             times = ds.time.values
-            
+
             # Fix 0-360 longitude convention (common in ECMWF/GFS)
             # Convert to -180-180 standard geographic coordinates to match Shapely WKT centroids
             if np.max(lons) > 180:
                 lons = np.where(lons > 180, lons - 360, lons)
-                
+
             lon_grid, lat_grid = np.meshgrid(lons, lats)
 
             # Build KDTree
@@ -344,10 +345,10 @@ class ECMWFExtractor:
     @timing_decorator
     def extract_batch(
         self,
-        catalogue_df: Union[pd.DataFrame, pl.DataFrame],
+        catalogue_df: pd.DataFrame | pl.DataFrame,
         n_jobs: int | None = None,
         verbose: bool = True,
-    ) -> Union[pd.DataFrame, pl.DataFrame]:
+    ) -> pd.DataFrame | pl.DataFrame:
         """
         Extract ECMWF data for a catalogue DataFrame.
 
@@ -377,12 +378,20 @@ class ECMWFExtractor:
         if n_jobs is None:
             n_jobs = self.default_n_jobs
 
-        time_col = "start date SAFE" if "start date SAFE" in catalogue_df.columns else "start_date"
+        time_col = (
+            "start date SAFE"
+            if "start date SAFE" in catalogue_df.columns
+            else "start_date"
+        )
         if time_col not in catalogue_df.columns:
             raise ValueError("Missing time column")
 
         geom_col = next(
-            (col for col in ["polygon SLC", "polygon GRD", "geometry"] if col in catalogue_df.columns),
+            (
+                col
+                for col in ["polygon SLC", "polygon GRD", "geometry"]
+                if col in catalogue_df.columns
+            ),
             None,
         )
         if geom_col is None:
@@ -414,7 +423,7 @@ class ECMWFExtractor:
                 for col in self.output_columns:
                     catalogue_df.loc[idx, col] = np.nan
                 continue
-            
+
             if key not in groups:
                 groups[key] = {
                     "is_fallback": row["_ecmwf_is_fallback"],
@@ -429,20 +438,26 @@ class ECMWFExtractor:
             """Process a single file for a group of indices."""
             indices = group_info["indices"]
             is_fb = group_info["is_fallback"]
-            
+
             cache_entry = self._load_ecmwf_data(str(group_info["__key__"]), is_fb)
             if cache_entry is None:
-                return {idx: {col: np.nan for col in self.output_columns} for idx in indices}
-            
-            return self._extract_values_batch(cache_entry, indices, df_with_info, geom_col, time_col)
+                return {
+                    idx: {col: np.nan for col in self.output_columns} for idx in indices
+                }
+
+            return self._extract_values_batch(
+                cache_entry, indices, df_with_info, geom_col, time_col
+            )
 
         # Process groups (inject key for the closure)
         group_list = [{"__key__": k, **v} for k, v in groups.items()]
-        
+
         if n_jobs > 1 and len(group_list) > 0:
             all_results = Parallel(n_jobs=n_jobs, verbose=0)(
                 delayed(process_group)(info)
-                for info in tqdm(group_list, desc="Processing ECMWF", disable=not verbose)
+                for info in tqdm(
+                    group_list, desc="Processing ECMWF", disable=not verbose
+                )
             )
         else:
             all_results = []
@@ -456,8 +471,12 @@ class ECMWFExtractor:
                     catalogue_df.loc[idx, col] = val
 
         if verbose:
-            logger.info(f"🏁 ECMWF extraction total time: {time.time() - total_start:.3f}s")
-            logger.info(f"   Cache: hits={self._cache_hits}, misses={self._cache_misses}")
+            logger.info(
+                f"🏁 ECMWF extraction total time: {time.time() - total_start:.3f}s"
+            )
+            logger.info(
+                f"   Cache: hits={self._cache_hits}, misses={self._cache_misses}"
+            )
 
         if is_polars:
             return pl.from_pandas(catalogue_df)
@@ -468,12 +487,13 @@ class ECMWFExtractor:
 # CONVENIENCE FUNCTIONS
 # ============================================================================
 
+
 def add_ecmwf_to_catalogue(
-    catalogue_df: Union[pd.DataFrame, pl.DataFrame],
+    catalogue_df: pd.DataFrame | pl.DataFrame,
     config_path: str | None = None,
     n_jobs: int = 6,
     verbose: bool = True,
-) -> Union[pd.DataFrame, pl.DataFrame]:
+) -> pd.DataFrame | pl.DataFrame:
     """
     Convenience function to add ECMWF wind data to a catalogue.
 

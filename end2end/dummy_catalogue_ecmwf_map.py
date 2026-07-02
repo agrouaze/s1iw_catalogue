@@ -91,7 +91,9 @@ def create_dummy_catalogue(
         f"   Grid: lon [{lon_min:.2f}, {lon_max:.2f}], lat [{lat_min:.2f}, {lat_max:.2f}]"
     )
     logger.info(f"   Step: {step_deg:.3f}° (~{step_deg * 111:.1f}km)")
-    logger.info(f"   Polygon size: {polygon_size_deg:.3f}° (~{polygon_size_deg * 111:.1f}km)")
+    logger.info(
+        f"   Polygon size: {polygon_size_deg:.3f}° (~{polygon_size_deg * 111:.1f}km)"
+    )
     logger.info("=" * 60)
 
     lons = np.arange(lon_min, lon_max + step_deg, step_deg)
@@ -104,7 +106,9 @@ def create_dummy_catalogue(
     for lon in lons:
         for lat in lats:
             half_size = polygon_size_deg / 2
-            polygon = box(lon - half_size, lat - half_size, lon + half_size, lat + half_size)
+            polygon = box(
+                lon - half_size, lat - half_size, lon + half_size, lat + half_size
+            )
 
             for k in range(n_products_per_location):
                 product_time = start_date + timedelta(hours=k * 3)
@@ -140,8 +144,12 @@ def create_dummy_catalogue(
     df["geometry"] = df["polygon SLC"].apply(wkt.loads)
 
     logger.info(f"✅ Created {len(df)} dummy products")
-    logger.info(f"   Grid: {len(lons)} x {len(lats)} = {len(lons) * len(lats)} locations")
-    logger.info(f"   Time range: {df['start date SAFE'].min()} to {df['start date SAFE'].max()}")
+    logger.info(
+        f"   Grid: {len(lons)} x {len(lats)} = {len(lons) * len(lats)} locations"
+    )
+    logger.info(
+        f"   Time range: {df['start date SAFE'].min()} to {df['start date SAFE'].max()}"
+    )
 
     return df
 
@@ -237,9 +245,13 @@ def plot_ecmwf_map(
     if vmax is None:
         vmax = values.max() * 1.1 if values.max() > 0 else values.max() * 0.9
 
-    logger.info(f"📊 Plotting {var_name}: {len(values)} points, range [{vmin:.2f}, {vmax:.2f}]")
+    logger.info(
+        f"📊 Plotting {var_name}: {len(values)} points, range [{vmin:.2f}, {vmax:.2f}]"
+    )
 
-    fig, ax = plt.subplots(figsize=(12, 10), subplot_kw={"projection": ccrs.PlateCarree()})
+    fig, ax = plt.subplots(
+        figsize=(12, 10), subplot_kw={"projection": ccrs.PlateCarree()}
+    )
 
     lon_min, lon_max = centroids[:, 0].min() - 0.5, centroids[:, 0].max() + 0.5
     lat_min, lat_max = centroids[:, 1].min() - 0.5, centroids[:, 1].max() + 0.5
@@ -250,7 +262,9 @@ def plot_ecmwf_map(
     ax.add_feature(cfeature.COASTLINE, linewidth=0.8)
     ax.add_feature(cfeature.BORDERS, linewidth=0.5, linestyle=":")
 
-    gl = ax.gridlines(draw_labels=True, linewidth=0.5, color="gray", alpha=0.5, linestyle="--")
+    gl = ax.gridlines(
+        draw_labels=True, linewidth=0.5, color="gray", alpha=0.5, linestyle="--"
+    )
     gl.top_labels = False
     gl.right_labels = False
     gl.xformatter = LONGITUDE_FORMATTER
@@ -272,14 +286,20 @@ def plot_ecmwf_map(
     )
 
     cbar = fig.colorbar(scatter, ax=ax, orientation="vertical", pad=0.05)
-    cbar_label = "10m U-component (m/s)" if "U10" in var_name else "10m V-component (m/s)"
+    cbar_label = (
+        "10m U-component (m/s)" if "U10" in var_name else "10m V-component (m/s)"
+    )
     cbar.set_label(cbar_label, fontsize=12)
 
     ax.set_title(title if title else f"{var_name} - Iroise Sea", fontsize=14, pad=20)
 
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     ax.text(
-        0.02, 0.02, f"Generated: {timestamp}", transform=ax.transAxes, fontsize=8,
+        0.02,
+        0.02,
+        f"Generated: {timestamp}",
+        transform=ax.transAxes,
+        fontsize=8,
         bbox=dict(boxstyle="round", facecolor="white", alpha=0.8),
     )
 
@@ -308,7 +328,9 @@ def plot_combined_map(
 
     centroids = []
     speeds = []
-    valid_products = catalogue_df[catalogue_df["U10 ecmwf"].notna() & catalogue_df["V10 ecmwf"].notna()]
+    valid_products = catalogue_df[
+        catalogue_df["U10 ecmwf"].notna() & catalogue_df["V10 ecmwf"].notna()
+    ]
 
     for _, row in valid_products.iterrows():
         try:
@@ -329,7 +351,9 @@ def plot_combined_map(
     centroids = np.array(centroids)
     speeds = np.array(speeds)
 
-    fig, ax = plt.subplots(figsize=(12, 10), subplot_kw={"projection": ccrs.PlateCarree()})
+    fig, ax = plt.subplots(
+        figsize=(12, 10), subplot_kw={"projection": ccrs.PlateCarree()}
+    )
 
     lon_min, lon_max = centroids[:, 0].min() - 0.5, centroids[:, 0].max() + 0.5
     lat_min, lat_max = centroids[:, 1].min() - 0.5, centroids[:, 1].max() + 0.5
@@ -339,16 +363,27 @@ def plot_combined_map(
     ax.add_feature(cfeature.OCEAN, facecolor="lightblue", alpha=0.3)
     ax.add_feature(cfeature.COASTLINE, linewidth=0.8)
 
-    gl = ax.gridlines(draw_labels=True, linewidth=0.5, color="gray", alpha=0.5, linestyle="--")
+    gl = ax.gridlines(
+        draw_labels=True, linewidth=0.5, color="gray", alpha=0.5, linestyle="--"
+    )
     gl.top_labels = False
     gl.right_labels = False
     gl.xformatter = LONGITUDE_FORMATTER
     gl.yformatter = LATITUDE_FORMATTER
 
     scatter = ax.scatter(
-        centroids[:, 0], centroids[:, 1], c=speeds, s=80, cmap="YlOrRd",
-        vmin=0, vmax=speeds.max() * 1.1, transform=ccrs.PlateCarree(),
-        edgecolor="black", linewidth=0.5, alpha=0.85, zorder=10,
+        centroids[:, 0],
+        centroids[:, 1],
+        c=speeds,
+        s=80,
+        cmap="YlOrRd",
+        vmin=0,
+        vmax=speeds.max() * 1.1,
+        transform=ccrs.PlateCarree(),
+        edgecolor="black",
+        linewidth=0.5,
+        alpha=0.85,
+        zorder=10,
     )
 
     cbar = fig.colorbar(scatter, ax=ax, orientation="vertical", pad=0.05)
@@ -364,17 +399,35 @@ def plot_combined_map(
 
 def main() -> None:
     """Main entry point."""
-    parser = argparse.ArgumentParser(description="Create dummy catalogue and extract ECMWF values")
+    parser = argparse.ArgumentParser(
+        description="Create dummy catalogue and extract ECMWF values"
+    )
 
-    parser.add_argument("--output_png_dir", required=True, help="Output directory for PNG maps")
-    parser.add_argument("--output_catalogue", help="Output path for the dummy catalogue (.parquet)")
-    parser.add_argument("--config_path", default="s1iw_catalogue/localconfig_second_real.yml", help="Path to config file")
-    parser.add_argument("--step_deg", type=float, default=0.45, help="Grid spacing in degrees")
-    parser.add_argument("--date_start", default="2023-01-15 12:00:00", help="Start date for products")
+    parser.add_argument(
+        "--output_png_dir", required=True, help="Output directory for PNG maps"
+    )
+    parser.add_argument(
+        "--output_catalogue", help="Output path for the dummy catalogue (.parquet)"
+    )
+    parser.add_argument(
+        "--config_path",
+        default="s1iw_catalogue/localconfig_second_real.yml",
+        help="Path to config file",
+    )
+    parser.add_argument(
+        "--step_deg", type=float, default=0.45, help="Grid spacing in degrees"
+    )
+    parser.add_argument(
+        "--date_start", default="2023-01-15 12:00:00", help="Start date for products"
+    )
     parser.add_argument("--n_jobs", type=int, default=4, help="Number of parallel jobs")
-    parser.add_argument("--log_level", choices=["DEBUG", "INFO", "WARNING", "ERROR"], default="INFO")
-    parser.add_argument("--skip_extraction", action="store_true", help="Skip ECMWF extraction")
-    
+    parser.add_argument(
+        "--log_level", choices=["DEBUG", "INFO", "WARNING", "ERROR"], default="INFO"
+    )
+    parser.add_argument(
+        "--skip_extraction", action="store_true", help="Skip ECMWF extraction"
+    )
+
     args = parser.parse_args()
     setup_logging(args.log_level)
 
@@ -382,7 +435,9 @@ def main() -> None:
     logger.info("🚀 Starting dummy catalogue creation with ECMWF extraction")
     logger.info("=" * 60)
 
-    catalogue_df = create_dummy_catalogue(date_start=args.date_start, step_deg=args.step_deg)
+    catalogue_df = create_dummy_catalogue(
+        date_start=args.date_start, step_deg=args.step_deg
+    )
 
     if not args.skip_extraction:
         catalogue_df = extract_ecmwf_for_catalogue(
@@ -398,8 +453,20 @@ def main() -> None:
         logger.info(f"✅ Saved catalogue to: {args.output_catalogue}")
 
     logger.info("\n🗺️ Creating maps...")
-    plot_ecmwf_map(catalogue_df, args.output_png_dir, var_name="U10 ecmwf", cmap="RdBu_r", log_level=args.log_level)
-    plot_ecmwf_map(catalogue_df, args.output_png_dir, var_name="V10 ecmwf", cmap="RdBu_r", log_level=args.log_level)
+    plot_ecmwf_map(
+        catalogue_df,
+        args.output_png_dir,
+        var_name="U10 ecmwf",
+        cmap="RdBu_r",
+        log_level=args.log_level,
+    )
+    plot_ecmwf_map(
+        catalogue_df,
+        args.output_png_dir,
+        var_name="V10 ecmwf",
+        cmap="RdBu_r",
+        log_level=args.log_level,
+    )
     plot_combined_map(catalogue_df, args.output_png_dir, log_level=args.log_level)
 
     logger.info("\n✅ All done!")
