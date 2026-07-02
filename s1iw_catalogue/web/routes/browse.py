@@ -260,7 +260,7 @@ async def get_wind_heatmap(request: HeatmapRequest) -> dict[str, Any]:
 
     # Filter rows with both U10 and V10
     wind_df = df.filter(
-        pl.col("U10 ecmwf").is_not_null() & pl.col("v10 ecmwf").is_not_null()
+        pl.col("U10 ecmwf").is_not_null() & pl.col("V10 ecmwf").is_not_null()
     )
 
     if wind_df.height == 0:
@@ -272,7 +272,7 @@ async def get_wind_heatmap(request: HeatmapRequest) -> dict[str, Any]:
     # Extract data
     data = {
         "u10": wind_df["U10 ecmwf"].to_list(),
-        "v10": wind_df["v10 ecmwf"].to_list(),
+        "V10": wind_df["V10 ecmwf"].to_list(),
     }
 
     return {"data": data, "count": wind_df.height}

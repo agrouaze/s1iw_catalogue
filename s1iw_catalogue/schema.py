@@ -1,6 +1,6 @@
 """Parquet schema definition for the catalogue."""
 
-from typing import Any, Dict
+from typing import Any
 
 import numpy as np
 import polars as pl
@@ -23,9 +23,9 @@ SCHEMA: dict[str, Any] = {
     # WW3 wave variables (single values from nearest grid point)
     "Hs WW3": pl.Float32,  # Significant wave height at nearest WW3 grid point
     "Tp WW3": pl.Float32,  # Peak period at nearest WW3 grid point
-    # ECMWF variables
-    "U10 ecmwf": pl.Float32,
-    "v10 ecmwf": pl.Float32,
+    # ECMWF meteorological variables (single values from nearest grid point)
+    "U10 ecmwf": pl.Float32,  # 10 metre U wind component
+    "V10 ecmwf": pl.Float32,  # 10 metre V wind component
     # Time columns
     "start date SAFE": pl.Datetime,
     "horodating": pl.Datetime,
@@ -40,10 +40,13 @@ SCHEMA: dict[str, Any] = {
 }
 
 # List of WW3 column names for easy reference
-WW3_COLUMNS = ["Hs WW3", "Tp WW3"]
+WW3_COLUMNS: list[str] = ["Hs WW3", "Tp WW3"]
+
+# List of ECMWF column names for easy reference
+ECMWF_COLUMNS: list[str] = ["U10 ecmwf", "V10 ecmwf"]
 
 # List of all expected columns
-ALL_COLUMNS = list(SCHEMA.keys())
+ALL_COLUMNS: list[str] = list(SCHEMA.keys())
 
 
 def validate_schema(df: pl.DataFrame) -> bool:
@@ -98,6 +101,28 @@ def ensure_ww3_columns(df: pl.DataFrame, fill_value: float = np.nan) -> pl.DataF
     """
     result_df = df.clone()
     for col in WW3_COLUMNS:
+        if col not in result_df.columns:
+            # Add empty column with correct type
+            result_df = result_df.with_columns(
+                pl.Series(col, [fill_value] * len(result_df)).cast(pl.Float32)
+            )
+    return result_df
+
+
+def ensure_ecmwf_columns(df: pl.DataFrame, fill_value: float = np.nan) -> pl.DataFrame:
+    """
+    Ensure the DataFrame has all ECMWF columns.
+    Missing columns are added with fill_value.
+
+    Args:
+        df: Polars DataFrame
+        fill_value: Value to fill missing columns with
+
+    Returns:
+        DataFrame with ECMWF columns guaranteed
+    """
+    result_df = df.clone()
+    for col in ECMWF_COLUMNS:
         if col not in result_df.columns:
             # Add empty column with correct type
             result_df = result_df.with_columns(

@@ -405,7 +405,7 @@ class CatalogueUpdater:
             pl.lit(None, dtype=pl.Float32).alias("Hs WW3"),
             pl.lit(None, dtype=pl.Float32).alias("Tp WW3"),
             pl.lit(None, dtype=pl.Float32).alias("U10 ecmwf"),
-            pl.lit(None, dtype=pl.Float32).alias("v10 ecmwf"),
+            pl.lit(None, dtype=pl.Float32).alias("V10 ecmwf"),
             pl.col("start_date").alias("start date SAFE"),
             pl.lit(datetime.datetime.now()).alias("horodating"),
             pl.lit(None, dtype=pl.Utf8).alias("polygon SLC"),
@@ -461,7 +461,7 @@ class CatalogueUpdater:
             pl.lit(None, dtype=pl.Float32).alias("Hs WW3"),
             pl.lit(None, dtype=pl.Float32).alias("Tp WW3"),
             pl.lit(None, dtype=pl.Float32).alias("U10 ecmwf"),
-            pl.lit(None, dtype=pl.Float32).alias("v10 ecmwf"),
+            pl.lit(None, dtype=pl.Float32).alias("V10 ecmwf"),
             pl.col("start_date").alias("start date SAFE"),
             pl.lit(datetime.datetime.now()).alias("horodating"),
             pl.lit(None, dtype=pl.Utf8).alias("polygon SLC"),
@@ -1252,7 +1252,7 @@ class CatalogueUpdater:
             merged["datasets"] = list(all_datasets)
 
             # Merge meteo: take first non-null
-            for meteo_col in ["Hs WW3", "Tp WW3", "U10 ecmwf", "v10 ecmwf"]:
+            for meteo_col in ["Hs WW3", "Tp WW3", "U10 ecmwf", "V10 ecmwf"]:
                 for r in rows_list:
                     val = r.get(meteo_col)
                     if val is not None:
@@ -2318,7 +2318,7 @@ class CatalogueUpdater:
                 pl.col("Hs WW3").first().alias("Hs WW3"),
                 pl.col("Tp WW3").first().alias("Tp WW3"),
                 pl.col("U10 ecmwf").first().alias("U10 ecmwf"),
-                pl.col("v10 ecmwf").first().alias("v10 ecmwf"),
+                pl.col("V10 ecmwf").first().alias("V10 ecmwf"),
                 pl.col("start date SAFE").min().alias("start date SAFE"),
                 pl.col("horodating").first().alias("horodating"),
                 pl.col("polygon SLC").first().alias("polygon SLC"),

@@ -22,7 +22,7 @@ def test_schema_dict_has_all_columns():
         "Hs WW3",
         "Tp WW3",
         "U10 ecmwf",
-        "v10 ecmwf",
+        "V10 ecmwf",
         "start date SAFE",
         "horodating",
         "polygon SLC",  # <-- changed from "polygon of the acquisition from CDSE"

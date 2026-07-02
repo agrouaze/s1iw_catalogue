@@ -31,7 +31,7 @@ Build and maintain a single **Parquet** file that centralises, for each SAFE (Se
 | `Hs WW3` | float | Significant wave height (m) from WaveWatch III, interpolated to SAFE centroid |
 | `Tp WW3` | float | Peak period (s) from WW3 |
 | `U10 ecmwf` | float | Zonal wind at 10 m (m/s) from ECMWF (0.1° grid) |
-| `v10 ecmwf` | float | Meridional wind at 10 m (m/s) from ECMWF |
+| `V10 ecmwf` | float | Meridional wind at 10 m (m/s) from ECMWF |
 | `start date SAFE` | timestamp | Acquisition start date (extracted from the SAFE name) |
 | `horodating` | timestamp | Date and time when this row was **last updated** in the catalogue (system time) |
 | `polygon SLC` | string | Ground footprint polygon (WKT format) for the SLC product from CDSE |
@@ -216,7 +216,7 @@ Update rules per column family:
 | `PATH *` | Fill if empty; never overwrite an existing path |
 | `datasets` | Merge new datasets; preserve existing ones |
 | `category` | Recompute based on merged datasets using priority hierarchy |
-| `Hs WW3`, `Tp WW3`, `U10 ecmwf`, `v10 ecmwf` | Fill if empty; optional `--force-meteo` to refresh |
+| `Hs WW3`, `Tp WW3`, `U10 ecmwf`, `V10 ecmwf` | Fill if empty; optional `--force-meteo` to refresh |
 | `horodating` | Always set to current time when row is modified |
 | `start date SAFE`, `polygon SLC/GRD`, `S3path SLC/GRD`, `polarization`, `unit` | Set once at creation; never updated |
 
