@@ -106,143 +106,100 @@ class CatalogueUpdater:
                         force_update: bool = False,
                         verbose: bool = True) -> Union[pd.DataFrame, pl.DataFrame]:
         """
-        Update catalogue with WW3 wave data (FAST mode: nearest grid point to centroid).
+        Update catalogue with WW3 wave data.
         
-        This method adds the following columns:
-        - mean_hs_value: Significant wave height at nearest WW3 grid point
-        - max_hs_value: Same as mean_hs_value (nearest point only)
-        - mean_t01_value: Peak period at nearest WW3 grid point
-        - max_t01_value: Same as mean_t01_value (nearest point only)
-        
-        Note: Values may be NaN if the centroid falls on land or geometry is invalid.
+        Strategy:
+        - null values = not yet extracted -> EXTRACT
+        - NaN values = extracted but on land/invalid -> SKIP (keep NaN)
         
         Args:
             catalogue_df: Pandas or Polars catalogue DataFrame
             n_jobs: Number of parallel workers
-            force_update: If True, recalculate even if columns exist
+            force_update: If True, recalculate even if values exist
             verbose: If True, log progress information
             
         Returns:
             Updated DataFrame (same type as input)
         """
         is_polars = isinstance(catalogue_df, pl.DataFrame)
-        is_pandas = isinstance(catalogue_df, pd.DataFrame)
         
-        if not is_polars and not is_pandas:
-            raise TypeError(f"Unsupported DataFrame type: {type(catalogue_df)}")
+        # Standardiser vers Polars pour le traitement (plus facile pour gérer null vs NaN)
+        if is_polars:
+            df = catalogue_df.clone()
+        else:
+            df = pl.from_pandas(catalogue_df)
         
-        # Check which columns already exist
-        existing_cols = [col for col in WW3_COLUMNS if col in catalogue_df.columns]
+        # 1. S'assurer que les colonnes WW3 existent (créées en null par défaut)
+        for col in WW3_COLUMNS:
+            if col not in df.columns:
+                df = df.with_columns(pl.lit(None, dtype=pl.Float32).alias(col))
         
-        if existing_cols and not force_update:
-            logger.info(f"WW3 columns already exist: {existing_cols}")
-            logger.info("Use force_update=True to recalculate")
-            return catalogue_df
+        # 2. Construire le masque des lignes qui nécessitent UNE extraction
+        if force_update:
+            mask = pl.lit(True)
+        else:
+            # is_null() cible UNIQUEMENT les valeurs nulles (vides), 
+            # il ignore les NaN (qui signifient "sur terre / invalide")
+            mask = pl.col(WW3_COLUMNS[0]).is_null()
+            for col in WW3_COLUMNS[1:]:
+                mask = mask | pl.col(col).is_null()
         
-        # Check for time column
-        time_col = None
-        for col in ['start date SAFE', 'start_date']:
-            if col in catalogue_df.columns:
-                time_col = col
-                break
+        missing_df = df.filter(mask)
+        missing_count = missing_df.height
         
-        if time_col is None:
-            raise ValueError("Missing required time column. Expected: 'start date SAFE' or 'start_date'")
-        
-        # Check for geometry columns
-        geom_cols = ['geometry', 'polygon SLC', 'polygon GRD', 'polygon', 'footprint', 'GeoFootprint']
-        geom_col = None
-        for col in geom_cols:
-            if col in catalogue_df.columns:
-                geom_col = col
-                break
-        
-        if geom_col is None:
-            raise ValueError("No geometry column found. Expected: geometry, polygon SLC, polygon GRD, etc.")
+        if missing_count == 0:
+            if verbose:
+                logger.info("✅ All products already have WW3 data (null values filled, NaN preserved).")
+            return catalogue_df if is_polars else df.to_pandas()
         
         if verbose:
-            logger.info(f"Adding WW3 data to {len(catalogue_df)} products")
-            logger.info(f"Using time from: {time_col}")
-            logger.info(f"Using geometry from: {geom_col}")
-            logger.info("Using FAST mode (nearest grid point to centroid)")
+            logger.info(f"🌊 Found {missing_count} products with empty WW3 cells (null). Extracting...")
         
-        # For products that already have WW3 data and we're not forcing update
-        if existing_cols and not force_update:
-            if is_polars:
-                pdf = catalogue_df.to_pandas()
+        # 3. Lancer l'extraction UNIQUEMENT sur le sous-ensemble manquant
+        # add_ww3_to_catalogue retourne un DataFrame avec les mêmes lignes + les colonnes remplies
+        extracted_df = add_ww3_to_catalogue(
+            missing_df,
+            config_path=self.config_path,
+            n_jobs=n_jobs,
+            verbose=verbose
+        )
+        
+        # 4. Fusionner les résultats de façon très performante (sans boucle for)
+        # On utilise un index de ligne pour faire un join propre
+        df_with_idx = df.with_row_index("_ww3_idx")
+        extracted_with_idx = extracted_df.with_row_index("_ww3_idx")
+        
+        # On ne garde que l'index et les nouvelles colonnes extraites
+        update_cols = ["_ww3_idx"] + WW3_COLUMNS
+        updates = extracted_with_idx.select(update_cols)
+        
+        # Jointure
+        merged = df_with_idx.join(updates, on="_ww3_idx", how="left", suffix="_new")
+        
+        # Utiliser coalesce pour écraser les 'null' par les nouvelles valeurs,
+        # tout en préservant les 'NaN' qui n'ont pas été ré-extraites
+        final_exprs = []
+        for col in merged.columns:
+            if col in WW3_COLUMNS:
+                # Prend la nouvelle valeur si elle existe, sinon garde l'ancienne
+                final_exprs.append(pl.coalesce([pl.col(f"{col}_new"), pl.col(col)]).alias(col))
+            elif col.endswith("_new"):
+                # Ignorer les colonnes _new résiduelles
+                continue
             else:
-                pdf = catalogue_df
-            
-            mask = pdf[existing_cols].isna().any(axis=1)
-            
-            if mask.sum() == 0:
-                if verbose:
-                    logger.info("All products already have WW3 data")
-                return catalogue_df
-            
-            if verbose:
-                logger.info(f"Found {mask.sum()} products missing WW3 data")
-            
-            if is_polars:
-                missing_df = catalogue_df.filter(pl.Series(mask))
-            else:
-                missing_df = catalogue_df.loc[mask].copy()
-            
-            if len(missing_df) > 0:
-                ww3_results = add_ww3_to_catalogue(
-                    missing_df,
-                    config_path=self.config_path,
-                    n_jobs=n_jobs,
-                    verbose=verbose
-                )
+                final_exprs.append(pl.col(col))
                 
-                if is_polars:
-                    result_df = catalogue_df.clone()
-                    for col in WW3_COLUMNS:
-                        if col in ww3_results.columns:
-                            values = ww3_results[col].to_pandas().values
-                            idx = 0
-                            for i in range(len(result_df)):
-                                if mask.iloc[i]:
-                                    result_df = result_df.with_columns(
-                                        pl.when(pl.arange(0, len(result_df)) == i)
-                                        .then(pl.lit(values[idx]))
-                                        .otherwise(pl.col(col))
-                                        .alias(col)
-                                    )
-                                    idx += 1
-                else:
-                    result_df = catalogue_df.copy()
-                    for col in WW3_COLUMNS:
-                        if col in ww3_results.columns:
-                            result_df.loc[mask, col] = ww3_results[col].values
-            else:
-                result_df = catalogue_df
+        result_df = merged.select(final_exprs).drop("_ww3_idx")
+        
+        if verbose:
+            still_null = result_df.filter(pl.col(WW3_COLUMNS[0]).is_null()).height
+            logger.info(f"✅ WW3 extraction complete. {missing_count - still_null}/{missing_count} successfully extracted.")
+        
+        # Retourner le même type qu'en entrée
+        if is_polars:
+            return result_df
         else:
-            # All products need WW3 data
-            result_df = add_ww3_to_catalogue(
-                catalogue_df,
-                config_path=self.config_path,
-                n_jobs=n_jobs,
-                verbose=verbose
-            )
-        
-        # Count successful extractions
-        if verbose and 'mean_hs_value' in result_df.columns:
-            if isinstance(result_df, pl.DataFrame):
-                null_count = result_df['mean_hs_value'].null_count()
-            else:
-                null_count = result_df['mean_hs_value'].isna().sum()
-            
-            if null_count == 0:
-                logger.info("All products now have WW3 data")
-            else:
-                logger.info(f"WW3 data available for {len(result_df) - null_count}/{len(result_df)} products")
-                logger.info(f"{null_count} products have missing WW3 data (likely land or invalid geometry)")
-        
-        logger.info("WW3 data added successfully")
-        
-        return result_df
+            return result_df.to_pandas()
     
     def update_batch(self, 
                      catalogue_df,

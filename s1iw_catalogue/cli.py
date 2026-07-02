@@ -5,13 +5,15 @@ from typing import Optional
 from pathlib import Path
 
 import click
-import polars as pl
-
+import logging
 from s1iw_catalogue.catalogue import S1IWCatalogue
 from s1iw_catalogue.config import load_config
 from s1iw_catalogue.stats import CatalogueStats
 
-
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+)
 @click.group()
 @click.option(
     "--config", "-c", type=click.Path(exists=True), help="Path to configuration file."

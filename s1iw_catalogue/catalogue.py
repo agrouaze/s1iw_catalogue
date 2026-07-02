@@ -17,15 +17,15 @@ from s1iw_catalogue.stats import CatalogueStats
 # Set up module-level logger
 logger = logging.getLogger(__name__)
 
-# Ensure the logger has a handler (similar to updater.py)
-if not logger.handlers:
-    handler = logging.StreamHandler()
-    formatter = logging.Formatter(
-        "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
-    )
-    handler.setFormatter(formatter)
-    logger.addHandler(handler)
-    logger.setLevel(logging.INFO)
+# # Ensure the logger has a handler (similar to updater.py)
+# if not logger.handlers:
+#     handler = logging.StreamHandler()
+#     formatter = logging.Formatter(
+#         "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+#     )
+#     handler.setFormatter(formatter)
+#     logger.addHandler(handler)
+#     logger.setLevel(logging.INFO)
 
 
 class S1IWCatalogue:
