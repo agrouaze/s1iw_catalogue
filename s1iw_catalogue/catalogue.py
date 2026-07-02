@@ -254,32 +254,36 @@ class S1IWCatalogue:
         """
         Return dataset metadata (description, category, type) from the config file.
 
-        Supports both flat and nested structures:
-        - Flat: {"dataset_name": {"path": "...", "type": "slc", ...}}
-        - Nested: {"slc": {"dataset_name": {...}}, "grd": {"dataset_name": {...}}}
+        Supports flat structure where keys are dataset names:
+        reference_listings:
+        dataset_name_1:
+            path: "..."
+            type: "slc"
+            description: "..."
+            category: "..."
+        dataset_name_2:
+            path: "..."
+            type: "grd"
+            description: "..."
+            category: "..."
         """
         reference_listings = self._config.get("paths", {}).get("reference_listings", {})
         metadata = {}
 
-        for key, value in reference_listings.items():
-            # Check if this is a nested structure (key is 'slc', 'grd', or 'ocn')
-            if isinstance(value, dict) and all(
-                isinstance(v, dict) and "path" in v for v in value.values()
-            ):
-                # Nested structure: flatten it
-                for dataset_name, dataset_info in value.items():
-                    metadata[dataset_name] = {
-                        "description": dataset_info.get("description", ""),
-                        "category": dataset_info.get("category", "undefined"),
-                        "type": dataset_info.get("type", ""),
-                    }
-            elif isinstance(value, dict) and "path" in value:
-                # Flat structure: direct dataset entry
-                metadata[key] = {
-                    "description": value.get("description", ""),
-                    "category": value.get("category", "undefined"),
-                    "type": value.get("type", ""),
+        for dataset_name, dataset_info in reference_listings.items():
+            if not isinstance(dataset_info, dict):
+                continue
+
+            # Check if this is a dataset entry (has 'path' key)
+            if "path" in dataset_info:
+                metadata[dataset_name] = {
+                    "description": dataset_info.get("description", ""),
+                    "category": dataset_info.get("category", "undefined"),
+                    "type": dataset_info.get("type", ""),
                 }
+            else:
+                # Skip if it's not a dataset entry (e.g., old format with nested slc/grd)
+                logger.debug(f"Skipping non-dataset entry: {dataset_name}")
 
         return metadata
 
