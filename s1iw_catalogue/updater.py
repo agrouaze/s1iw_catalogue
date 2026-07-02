@@ -1,6 +1,8 @@
 """Incremental update logic for the catalogue."""
 
-from typing import Any, Dict, List, Optional, Tuple, Union
+from __future__ import annotations
+
+from typing import Any
 
 import contextlib
 import datetime
@@ -16,7 +18,8 @@ import pandas as pd
 import polars as pl
 
 from s1iw_catalogue.config import load_config
-from s1iw_catalogue.schema import SCHEMA, WW3_COLUMNS
+from s1iw_catalogue.schema import ECMWF_COLUMNS, SCHEMA, WW3_COLUMNS
+from s1iw_catalogue.ecmwf_extractor import add_ecmwf_to_catalogue
 from s1iw_catalogue.ww3_extractor import add_ww3_to_catalogue
 
 # Set up module-level logger
@@ -98,7 +101,102 @@ class CatalogueUpdater:
             "start_date": start_date,
             "end_date": end_date,
         }
+    
+    def update_with_ecmwf(
+        self,
+        catalogue_df: pl.DataFrame | pd.DataFrame,
+        n_jobs: int = 6,
+        force_update: bool = False,
+        verbose: bool = True,
+    ) -> pl.DataFrame | pd.DataFrame:
+        """
+        Update catalogue with ECMWF 10m wind data.
 
+        Strategy:
+        - null values = not yet extracted -> EXTRACT
+        - NaN values = extracted but on land/invalid -> SKIP (keep NaN)
+
+        Args:
+            catalogue_df: Pandas or Polars catalogue DataFrame
+            n_jobs: Number of parallel workers
+            force_update: If True, recalculate even if values exist
+            verbose: If True, log progress information
+
+        Returns:
+            Updated DataFrame (same type as input)
+        """
+        is_polars = isinstance(catalogue_df, pl.DataFrame)
+
+        if is_polars:
+            df = catalogue_df.clone()
+        else:
+            df = pl.from_pandas(catalogue_df)
+
+        # 1. S'assurer que les colonnes ECMWF existent
+        for col in ECMWF_COLUMNS:
+            if col not in df.columns:
+                df = df.with_columns(pl.lit(None, dtype=pl.Float32).alias(col))
+
+        # 2. Construire le masque des lignes qui nécessitent UNE extraction
+        if force_update:
+            mask = pl.lit(True)
+        else:
+            mask = pl.col(ECMWF_COLUMNS[0]).is_null()
+            for col in ECMWF_COLUMNS[1:]:
+                mask = mask | pl.col(col).is_null()
+
+        missing_df = df.filter(mask)
+        missing_count = missing_df.height
+
+        if missing_count == 0:
+            if verbose:
+                logger.info(
+                    "✅ All products already have ECMWF data (null values filled, NaN preserved)."
+                )
+            return catalogue_df if is_polars else df.to_pandas()
+
+        if verbose:
+            logger.info(
+                f"🌬️ Found {missing_count} products with empty ECMWF cells (null). Extracting..."
+            )
+
+        # 3. Lancer l'extraction UNIQUEMENT sur le sous-ensemble manquant
+        extracted_df = add_ecmwf_to_catalogue(
+            missing_df, config_path=self.config_path, n_jobs=n_jobs, verbose=verbose
+        )
+
+        # 4. Fusionner les résultats via jointure
+        df_with_idx = df.with_row_index("_ecmwf_idx")
+        extracted_with_idx = extracted_df.with_row_index("_ecmwf_idx")
+
+        update_cols = ["_ecmwf_idx"] + ECMWF_COLUMNS
+        updates = extracted_with_idx.select(update_cols)
+
+        merged = df_with_idx.join(updates, on="_ecmwf_idx", how="left", suffix="_new")
+
+        final_exprs = []
+        for col in merged.columns:
+            if col in ECMWF_COLUMNS:
+                final_exprs.append(
+                    pl.coalesce([pl.col(f"{col}_new"), pl.col(col)]).alias(col)
+                )
+            elif col.endswith("_new"):
+                continue
+            else:
+                final_exprs.append(pl.col(col))
+
+        result_df = merged.select(final_exprs).drop("_ecmwf_idx")
+
+        if verbose:
+            still_null = result_df.filter(pl.col(ECMWF_COLUMNS[0]).is_null()).height
+            logger.info(
+                f"✅ ECMWF extraction complete. {missing_count - still_null}/{missing_count} successfully extracted."
+            )
+
+        if is_polars:
+            return result_df
+        return result_df.to_pandas()
+    
     def update_with_ww3(
         self,
         catalogue_df,
@@ -208,13 +306,26 @@ class CatalogueUpdater:
             return result_df.to_pandas()
 
     def update_batch(
-        self, catalogue_df, sources: list[str] = None, n_jobs: int = 6, **kwargs
-    ) -> pd.DataFrame | pl.DataFrame:
+        self,
+        catalogue_df: pl.DataFrame | pd.DataFrame,
+        sources: list[str] | None = None,
+        n_jobs: int = 6,
+        **kwargs: Any,
+    ) -> pl.DataFrame | pd.DataFrame:
         """
         Update catalogue with multiple data sources.
+
+        Args:
+            catalogue_df: Pandas or Polars catalogue DataFrame
+            sources: List of data sources to update (e.g. ['ww3', 'ecmwf'])
+            n_jobs: Number of parallel workers
+            **kwargs: Additional arguments passed to specific update methods
+
+        Returns:
+            Updated DataFrame (same type as input)
         """
         if sources is None:
-            sources = ["ww3"]
+            sources = ["ww3", "ecmwf"]
 
         result_df = catalogue_df
 
@@ -223,6 +334,10 @@ class CatalogueUpdater:
 
             if source == "ww3":
                 result_df = self.update_with_ww3(result_df, n_jobs=n_jobs, **kwargs)
+            elif source == "ecmwf":
+                result_df = self.update_with_ecmwf(result_df, n_jobs=n_jobs, **kwargs)
+            else:
+                logger.warning(f"Unknown update source: {source}")
 
             logger.info(f"Finished {source.upper()} update")
 
@@ -502,74 +617,77 @@ class CatalogueUpdater:
         start_total = time.time()
 
         # Step 1: Local SLC-GRD matching
-        logger.info("\n📍 Step 1/8: Local SLC-GRD matching...")
+        logger.info("\n📍 Step 1/9: Local SLC-GRD matching...")
         start = time.time()
         df = self._local_link_slc_grd(df)  # type: ignore[assignment]
         elapsed = time.time() - start
         self._log_catalogue_summary(df, "After local matching")
-        logger.info(f"✅ Step 1/8 completed in {elapsed:.1f}s")
+        logger.info(f"✅ Step 1/9 completed in {elapsed:.1f}s")
 
         # Step 2: CDSE fallback for SLC-GRD orphans
-        logger.info("\n📍 Step 2/8: CDSE fallback for SLC-GRD orphans...")
+        logger.info("\n📍 Step 2/9: CDSE fallback for SLC-GRD orphans...")
         start = time.time()
         df = self._cdse_fallback_link(df)
         df = self._merge_linked_rows(df)
         elapsed = time.time() - start
         self._log_catalogue_summary(df, "After CDSE fallback")
-        logger.info(f"✅ Step 2/8 completed in {elapsed:.1f}s")
+        logger.info(f"✅ Step 2/9 completed in {elapsed:.1f}s")
 
         # Step 3: Link OCN to GRD (primary)
-        logger.info("\n📍 Step 3/8: Linking OCN to GRD products...")
+        logger.info("\n📍 Step 3/9: Linking OCN to GRD products...")
         start = time.time()
         df = self._link_ocn_to_grd(df)
         elapsed = time.time() - start
         self._log_catalogue_summary(df, "After OCN-GRD linking")
-        logger.info(f"✅ Step 3/8 completed in {elapsed:.1f}s")
+        logger.info(f"✅ Step 3/9 completed in {elapsed:.1f}s")
 
         # Step 4: Fallback - Link OCN to SLC
-        logger.info("\n📍 Step 4/8: Fallback - Linking OCN to SLC...")
+        logger.info("\n📍 Step 4/9: Fallback - Linking OCN to SLC...")
         start = time.time()
         df = self._link_ocn_to_slc(df)
         elapsed = time.time() - start
         self._log_catalogue_summary(df, "After OCN-SLC fallback")
-        logger.info(f"✅ Step 4/8 completed in {elapsed:.1f}s")
+        logger.info(f"✅ Step 4/9 completed in {elapsed:.1f}s")
 
         # Step 5: Fetch polygons and S3 paths from CDSE
-        logger.info("\n📍 Step 5/8: Fetching polygons and S3 paths from CDSE...")
+        logger.info("\n📍 Step 5/9: Fetching polygons and S3 paths from CDSE...")
         start = time.time()
         df = self._update_polygons_and_s3paths(df)
         elapsed = time.time() - start
         self._log_catalogue_summary(df, "After polygon fetch")
-        logger.info(f"✅ Step 5/8 completed in {elapsed:.1f}s")
+        logger.info(f"✅ Step 5/9 completed in {elapsed:.1f}s")
 
         # Step 6: Check presence on Ifremer storage (including OCN)
-        logger.info("\n📍 Step 6/8: Checking presence on Ifremer storage...")
+        logger.info("\n📍 Step 6/9: Checking presence on Ifremer storage...")
         start = time.time()
         df = self._update_presence_columns(df, force=False)
         elapsed = time.time() - start
         self._log_catalogue_summary(df, "After presence check")
-        logger.info(f"✅ Step 6/8 completed in {elapsed:.1f}s")
+        logger.info(f"✅ Step 6/9 completed in {elapsed:.1f}s")
 
         # Step 7: Check derived products (L1B, L1C, L2WAV)
-        logger.info("\n📍 Step 7/8: Checking derived products (L1B, L1C, L2WAV)...")
+        logger.info("\n📍 Step 7/9: Checking derived products (L1B, L1C, L2WAV)...")
         start = time.time()
         df = self._update_derived_products(df)
         elapsed = time.time() - start
         self._log_catalogue_summary(df, "After derived products")
-        logger.info(f"✅ Step 7/8 completed in {elapsed:.1f}s")
+        logger.info(f"✅ Step 7/9 completed in {elapsed:.1f}s")
 
         # Step 8: Add WW3 wave data
-        logger.info("\n📍 Step 8/8: Adding WW3 wave data...")
+        logger.info("\n📍 Step 8/9: Adding WW3 wave data...")
         start = time.time()
-        df = self.update_with_ww3(
-            df,
-            n_jobs=6,
-            force_update=False,
-            verbose=True,
-        )
+        df = self.update_with_ww3(df, n_jobs=6, force_update=False, verbose=True)
         elapsed = time.time() - start
         self._log_catalogue_summary(df, "After WW3 extraction")
-        logger.info(f"✅ Step 8/8 completed in {elapsed:.1f}s")
+        logger.info(f"✅ Step 8/9 completed in {elapsed:.1f}s")
+
+        # Step 9: Add ECMWF 10m wind data
+        logger.info("\n📍 Step 9/9: Adding ECMWF 10m wind data...")
+        start = time.time()
+        df = self.update_with_ecmwf(df, n_jobs=6, force_update=False, verbose=True)
+        elapsed = time.time() - start
+        self._log_catalogue_summary(df, "After ECMWF extraction")
+        logger.info(f"✅ Step 9/9 completed in {elapsed:.1f}s")
 
         total_elapsed = time.time() - start_total
         logger.info("=" * 60)
