@@ -233,6 +233,11 @@ def query(ctx: click.Context, catalogue: Path, safe_name: str) -> None:
     help="Catalogue .parquet file to serve.",
 )
 @click.option("--reload", is_flag=True, help="Enable auto-reload for development.")
+@click.option(
+    "--debug",
+    is_flag=True,
+    help="Enable debug logging for the web server.",
+)
 @click.pass_context
 def serve(
     ctx: click.Context,
@@ -240,6 +245,7 @@ def serve(
     port: int,
     catalogue: Path,
     reload: bool,
+    debug: bool,
 ) -> None:
     """
     Launch the web interface to explore the catalogue.
@@ -248,6 +254,14 @@ def serve(
     if available via --config.
     """
     import os
+
+    # Set debug logging if requested
+    if debug:
+        import logging
+        logging.getLogger("s1iw_catalogue").setLevel(logging.DEBUG)
+        logging.getLogger("s1iw_catalogue.web").setLevel(logging.DEBUG)
+        logging.getLogger("s1iw_catalogue.catalogue").setLevel(logging.DEBUG)
+        click.echo("🐛 Debug logging enabled")
 
     os.environ["S1IW_CATALOGUE_PATH"] = str(catalogue)
 

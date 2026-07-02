@@ -271,6 +271,7 @@ class S1IWCatalogue:
         metadata = {}
 
         for dataset_name, dataset_info in reference_listings.items():
+            logger.debug(f"Processing dataset entry: {dataset_name} -> {dataset_info}")
             if not isinstance(dataset_info, dict):
                 continue
 
