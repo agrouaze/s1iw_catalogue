@@ -1,8 +1,3 @@
-[[tool.uv.index]]
-name = "s1ifr"
-url = "https://__token__${S1IFR_PYPI_TOKEN}@gitlab.ifremer.fr/api/v4/projects/4991/packages/pypi/simple"
-explicit = true
-
 [build-system]
 requires = ["hatchling", "hatch-vcs"]
 build-backend = "hatchling.build"
@@ -30,16 +25,34 @@ classifiers = [
 ]
 requires-python = ">=3.11"
 
+# ✅ REMOVED s1ifr from here - it's only needed for catalogue creation
 dependencies = [
-  "s1ifr",          # <-- Fixed: removed " @ s1ifr"
   "polars",
   "scipy",
   "click",
   "pyyaml",
   "cdsodatacli",
+  "xarray",
+  "joblib",
+  "tqdm",
 ]
 
 [project.optional-dependencies]
+# ✅ NEW: s1ifr only for catalogue creation
+catalogue = [
+  "s1ifr",
+]
+
+web = [
+  "fastapi",
+  "uvicorn[standard]",
+  "plotly",
+  "jinja2",
+  "python-multipart",
+  "shapely",
+  "geopandas",
+]
+
 dev = [
   "bandit",
   "black",
@@ -57,21 +70,13 @@ dev = [
   "coverage-badge",
   "pytest-html",
   "pytest-cov",
-]
-web = [
-  "fastapi",
-  "uvicorn[standard]",
-  "plotly",
-  "jinja2",
-  "python-multipart",
-  "shapely",
-  "geopandas",
+  "s1iw_catalogue[catalogue]",  # ✅ Include catalogue extras in dev
 ]
 
 [project.scripts]
 catalog-iw = "s1iw_catalogue.cli:main"
+catalog-iw-serve = "s1iw_catalogue.web.webcli:main" # Web only (lightweight)
 
-# Allow direct references if needed in the future
 [tool.hatch.metadata]
 allow-direct-references = true
 
@@ -80,6 +85,13 @@ source = "vcs"
 
 [tool.hatch.build.hooks.vcs]
 version-file = "s1iw_catalogue/_version.py"
+
+# Keep the uv index config for local development with catalogue creation
+[[tool.uv.index]]
+name = "s1ifr"
+url = "https://__token__${S1IFR_PYPI_TOKEN}@gitlab.ifremer.fr/api/v4/projects/4991/packages/pypi/simple"
+explicit = true
+
 
 [tool.black]
 target-version = ["py311"]
