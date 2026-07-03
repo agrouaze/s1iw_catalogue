@@ -75,14 +75,14 @@ def main() -> None:
 
     # Select columns
     if not args.columns and not args.show_all:
-        # Default key columns: SAFE SLC, SAFE GRD, start date, horodating, polarization, unité
+        # Default key columns: SAFE SLC, SAFE GRD, start date, horodating, polarization, unit
         default_cols = [
             "SAFE SLC",
             "SAFE GRD",
             "start date SAFE",
             "horodating",
             "polarization",
-            "unité",
+            "unit",
         ]
         cols_to_show = [c for c in default_cols if c in df.columns]
     elif args.columns:

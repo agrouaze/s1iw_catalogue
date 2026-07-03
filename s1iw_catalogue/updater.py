@@ -1,17 +1,26 @@
 """Incremental update logic for the catalogue."""
 
-from typing import Any, Dict, List, Optional, Tuple
+from __future__ import annotations
 
+from typing import Any
+
+import contextlib
 import datetime
+import hashlib
 import logging
+import os
 import re
 import time
 from collections import defaultdict
 from pathlib import Path
 
+import pandas as pd
 import polars as pl
 
-from s1iw_catalogue.schema import SCHEMA
+from s1iw_catalogue.config import load_config
+from s1iw_catalogue.ecmwf_extractor import add_ecmwf_to_catalogue
+from s1iw_catalogue.schema import ECMWF_COLUMNS, SCHEMA, WW3_COLUMNS
+from s1iw_catalogue.ww3_extractor import add_ww3_to_catalogue
 
 # Set up module-level logger
 logger = logging.getLogger(__name__)
@@ -20,17 +29,39 @@ logger = logging.getLogger(__name__)
 class CatalogueUpdater:
     """Handles incremental updates of the catalogue."""
 
-    def __init__(self, config: dict[str, Any]) -> None:
-        self.config = config
-        # Configure logger if not already configured (optional)
-        if not logger.handlers:
-            handler = logging.StreamHandler()
-            formatter = logging.Formatter(
-                "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
-            )
-            handler.setFormatter(formatter)
-            logger.addHandler(handler)
-            logger.setLevel(logging.INFO)
+    def __init__(
+        self,
+        config: str | Path | dict[str, Any] | None = None,
+        config_path: str | Path | None = None,
+    ):
+        """
+        Initialize the updater with configuration.
+
+        Args:
+            config: Configuration dictionary or path to config file
+            config_path: Path to configuration file (alternative to config)
+        """
+        # Silence overly verbose third-party loggers
+        logging.getLogger("cdsodatacli.query").setLevel(logging.WARNING)
+        logging.getLogger("cdsodatacli.scripts").setLevel(logging.WARNING)
+        # Resolve config path to absolute
+        if config_path:
+            self._config_path = Path(config_path).resolve()
+        elif isinstance(config, (str, Path)):
+            self._config_path = Path(config).resolve()
+        else:
+            self._config_path = None
+
+        # Load config
+        if isinstance(config, (str, Path)):
+            self._config = load_config(config_path=config)
+        elif isinstance(config, dict):
+            self._config = config
+        else:
+            self._config = load_config() if config is None else config
+
+        # For backward compatibility
+        self.config_path = str(self._config_path) if self._config_path else None
 
     @staticmethod
     def parse_safe_name(safe_name: str) -> dict[str, Any]:
@@ -73,6 +104,247 @@ class CatalogueUpdater:
             "start_date": start_date,
             "end_date": end_date,
         }
+
+    def update_with_ecmwf(
+        self,
+        catalogue_df: pl.DataFrame | pd.DataFrame,
+        n_jobs: int = 6,
+        force_update: bool = False,
+        verbose: bool = True,
+    ) -> pl.DataFrame | pd.DataFrame:
+        """
+        Update catalogue with ECMWF 10m wind data.
+
+        Strategy:
+        - null values = not yet extracted -> EXTRACT
+        - NaN values = extracted but on land/invalid -> SKIP (keep NaN)
+
+        Args:
+            catalogue_df: Pandas or Polars catalogue DataFrame
+            n_jobs: Number of parallel workers
+            force_update: If True, recalculate even if values exist
+            verbose: If True, log progress information
+
+        Returns:
+            Updated DataFrame (same type as input)
+        """
+        is_polars = isinstance(catalogue_df, pl.DataFrame)
+
+        if is_polars:
+            df = catalogue_df.clone()
+        else:
+            df = pl.from_pandas(catalogue_df)
+
+        # 1. S'assurer que les colonnes ECMWF existent
+        for col in ECMWF_COLUMNS:
+            if col not in df.columns:
+                df = df.with_columns(pl.lit(None, dtype=pl.Float32).alias(col))
+
+        # 2. Construire le masque des lignes qui nécessitent UNE extraction
+        if force_update:
+            mask = pl.lit(True)
+        else:
+            mask = pl.col(ECMWF_COLUMNS[0]).is_null()
+            for col in ECMWF_COLUMNS[1:]:
+                mask = mask | pl.col(col).is_null()
+
+        missing_df = df.filter(mask)
+        missing_count = missing_df.height
+
+        if missing_count == 0:
+            if verbose:
+                logger.info(
+                    "✅ All products already have ECMWF data (null values filled, NaN preserved)."
+                )
+            return catalogue_df if is_polars else df.to_pandas()
+
+        if verbose:
+            logger.info(
+                f"🌬️ Found {missing_count} products with empty ECMWF cells (null). Extracting..."
+            )
+
+        # 3. Lancer l'extraction UNIQUEMENT sur le sous-ensemble manquant
+        extracted_df = add_ecmwf_to_catalogue(
+            missing_df, config_path=self.config_path, n_jobs=n_jobs, verbose=verbose
+        )
+
+        # 4. Fusionner les résultats via jointure
+        df_with_idx = df.with_row_index("_ecmwf_idx")
+        extracted_with_idx = extracted_df.with_row_index("_ecmwf_idx")
+
+        update_cols = ["_ecmwf_idx"] + ECMWF_COLUMNS
+        updates = extracted_with_idx.select(update_cols)
+
+        merged = df_with_idx.join(updates, on="_ecmwf_idx", how="left", suffix="_new")
+
+        final_exprs = []
+        for col in merged.columns:
+            if col in ECMWF_COLUMNS:
+                final_exprs.append(
+                    pl.coalesce([pl.col(f"{col}_new"), pl.col(col)]).alias(col)
+                )
+            elif col.endswith("_new"):
+                continue
+            else:
+                final_exprs.append(pl.col(col))
+
+        result_df = merged.select(final_exprs).drop("_ecmwf_idx")
+
+        if verbose:
+            still_null = result_df.filter(pl.col(ECMWF_COLUMNS[0]).is_null()).height
+            logger.info(
+                f"✅ ECMWF extraction complete. {missing_count - still_null}/{missing_count} successfully extracted."
+            )
+
+        if is_polars:
+            return result_df
+        return result_df.to_pandas()
+
+    def update_with_ww3(
+        self,
+        catalogue_df,
+        n_jobs: int = 6,
+        force_update: bool = False,
+        verbose: bool = True,
+    ) -> pd.DataFrame | pl.DataFrame:
+        """
+        Update catalogue with WW3 wave data.
+
+        Strategy:
+        - null values = not yet extracted -> EXTRACT
+        - NaN values = extracted but on land/invalid -> SKIP (keep NaN)
+
+        Args:
+            catalogue_df: Pandas or Polars catalogue DataFrame
+            n_jobs: Number of parallel workers
+            force_update: If True, recalculate even if values exist
+            verbose: If True, log progress information
+
+        Returns:
+            Updated DataFrame (same type as input)
+        """
+        is_polars = isinstance(catalogue_df, pl.DataFrame)
+
+        # Standardiser vers Polars pour le traitement (plus facile pour gérer null vs NaN)
+        if is_polars:
+            df = catalogue_df.clone()
+        else:
+            df = pl.from_pandas(catalogue_df)
+
+        # 1. S'assurer que les colonnes WW3 existent (créées en null par défaut)
+        for col in WW3_COLUMNS:
+            if col not in df.columns:
+                df = df.with_columns(pl.lit(None, dtype=pl.Float32).alias(col))
+
+        # 2. Construire le masque des lignes qui nécessitent UNE extraction
+        if force_update:
+            mask = pl.lit(True)
+        else:
+            # is_null() cible UNIQUEMENT les valeurs nulles (vides),
+            # il ignore les NaN (qui signifient "sur terre / invalide")
+            mask = pl.col(WW3_COLUMNS[0]).is_null()
+            for col in WW3_COLUMNS[1:]:
+                mask = mask | pl.col(col).is_null()
+
+        missing_df = df.filter(mask)
+        missing_count = missing_df.height
+
+        if missing_count == 0:
+            if verbose:
+                logger.info(
+                    "✅ All products already have WW3 data (null values filled, NaN preserved)."
+                )
+            return catalogue_df if is_polars else df.to_pandas()
+
+        if verbose:
+            logger.info(
+                f"🌊 Found {missing_count} products with empty WW3 cells (null). Extracting..."
+            )
+
+        # 3. Lancer l'extraction UNIQUEMENT sur le sous-ensemble manquant
+        # add_ww3_to_catalogue retourne un DataFrame avec les mêmes lignes + les colonnes remplies
+        extracted_df = add_ww3_to_catalogue(
+            missing_df, config_path=self.config_path, n_jobs=n_jobs, verbose=verbose
+        )
+
+        # 4. Fusionner les résultats de façon très performante (sans boucle for)
+        # On utilise un index de ligne pour faire un join propre
+        df_with_idx = df.with_row_index("_ww3_idx")
+        extracted_with_idx = extracted_df.with_row_index("_ww3_idx")
+
+        # On ne garde que l'index et les nouvelles colonnes extraites
+        update_cols = ["_ww3_idx"] + WW3_COLUMNS
+        updates = extracted_with_idx.select(update_cols)
+
+        # Jointure
+        merged = df_with_idx.join(updates, on="_ww3_idx", how="left", suffix="_new")
+
+        # Utiliser coalesce pour écraser les 'null' par les nouvelles valeurs,
+        # tout en préservant les 'NaN' qui n'ont pas été ré-extraites
+        final_exprs = []
+        for col in merged.columns:
+            if col in WW3_COLUMNS:
+                # Prend la nouvelle valeur si elle existe, sinon garde l'ancienne
+                final_exprs.append(
+                    pl.coalesce([pl.col(f"{col}_new"), pl.col(col)]).alias(col)
+                )
+            elif col.endswith("_new"):
+                # Ignorer les colonnes _new résiduelles
+                continue
+            else:
+                final_exprs.append(pl.col(col))
+
+        result_df = merged.select(final_exprs).drop("_ww3_idx")
+
+        if verbose:
+            still_null = result_df.filter(pl.col(WW3_COLUMNS[0]).is_null()).height
+            logger.info(
+                f"✅ WW3 extraction complete. {missing_count - still_null}/{missing_count} successfully extracted."
+            )
+
+        # Retourner le même type qu'en entrée
+        if is_polars:
+            return result_df
+        else:
+            return result_df.to_pandas()
+
+    def update_batch(
+        self,
+        catalogue_df: pl.DataFrame | pd.DataFrame,
+        sources: list[str] | None = None,
+        n_jobs: int = 6,
+        **kwargs: Any,
+    ) -> pl.DataFrame | pd.DataFrame:
+        """
+        Update catalogue with multiple data sources.
+
+        Args:
+            catalogue_df: Pandas or Polars catalogue DataFrame
+            sources: List of data sources to update (e.g. ['ww3', 'ecmwf'])
+            n_jobs: Number of parallel workers
+            **kwargs: Additional arguments passed to specific update methods
+
+        Returns:
+            Updated DataFrame (same type as input)
+        """
+        if sources is None:
+            sources = ["ww3", "ecmwf"]
+
+        result_df = catalogue_df
+
+        for source in sources:
+            logger.info(f"Updating with {source.upper()} data...")
+
+            if source == "ww3":
+                result_df = self.update_with_ww3(result_df, n_jobs=n_jobs, **kwargs)
+            elif source == "ecmwf":
+                result_df = self.update_with_ecmwf(result_df, n_jobs=n_jobs, **kwargs)
+            else:
+                logger.warning(f"Unknown update source: {source}")
+
+            logger.info(f"Finished {source.upper()} update")
+
+        return result_df
 
     def _read_one_listing(self, path: Path) -> pl.DataFrame:
         """Read a single listing file (one SAFE name per line)."""
@@ -157,55 +429,73 @@ class CatalogueUpdater:
 
     def build_from_listings(
         self,
-        slc_listings: str | Path | list[str | Path] | dict[str, Any],
-        grd_listings: str | Path | list[str | Path] | dict[str, Any],
+        listings: dict[str, Any],
     ) -> pl.DataFrame:
         """
         Combine SLC and GRD listings into a catalogue DataFrame (no external queries).
 
-        Now handles dataset names from the configuration structure:
+        Expected config structure:
         paths:
         reference_listings:
-            slc:
-            "hibou2": "assets/listings/dummy_slc_listing_hibou.txt"
-            "castor5": "assets/listings/dummy_slc_listing_castor.txt"
-            grd:
-            "zebra": "assets/listings/dummy_grd_listing_zebre.txt"
-        """
-        logger.info("Building catalogue from SLC listings...")
+            dataset_name:
+            path: "/path/to/listing.txt"
+            type: "slc" | "grd" | "ocn"
+            description: "..."   (optional, stored only in config)
+            category: "..."      (optional, stored only in config)
 
-        # Handle both old format (list) and new format (dict with dataset names)
+        Listings without a valid 'type' or 'path' are skipped with a warning.
+        """
+        logger.info("Building catalogue from listings...")
+
+        # Separate by type
+        slc_paths = []
+        grd_paths = []
+        ocn_paths = []  # for future use
+
+        for name, info in listings.items():
+            if not isinstance(info, dict):
+                logger.warning(f"Listing '{name}' is not a dict; skipping.")
+                continue
+
+            path = info.get("path")
+            ptype = info.get("type", "").lower()
+
+            if not path:
+                logger.warning(f"Listing '{name}' has no 'path'; skipping.")
+                continue
+
+            if ptype not in ("slc", "grd", "ocn"):
+                logger.warning(
+                    f"Listing '{name}' has invalid type '{ptype}'; "
+                    "must be one of: slc, grd, ocn. Skipping."
+                )
+                continue
+
+            if ptype == "slc":
+                slc_paths.append((name, path))
+            elif ptype == "grd":
+                grd_paths.append((name, path))
+            elif ptype == "ocn":
+                ocn_paths.append((name, path))
+
+        # ---------- Build SLC rows ----------
         slc_dfs = []
-        if isinstance(slc_listings, dict):
-            # New format: dataset_name -> listing_path
-            for dataset_name, listing_path in slc_listings.items():
-                logger.info(f"Reading SLC dataset '{dataset_name}' from {listing_path}")
-                df_raw = self.read_listings(listing_path)
+        if slc_paths:
+            logger.info(f"Reading {len(slc_paths)} SLC dataset(s)...")
+            for name, path in slc_paths:
+                logger.info(f"Reading SLC dataset '{name}' from {path}")
+                df_raw = self.read_listings(path)
                 if df_raw.height > 0:
-                    # Add dataset name to each row
                     df_raw = df_raw.with_columns(
-                        pl.lit([dataset_name], dtype=pl.List(pl.Utf8)).alias(
-                            "dataset(s) d'appartenance"
-                        )
+                        pl.lit([name], dtype=pl.List(pl.Utf8)).alias("datasets")
                     )
                     slc_dfs.append(df_raw)
                 else:
-                    logger.warning(
-                        f"No valid SLC entries found in dataset '{dataset_name}'"
-                    )
+                    logger.warning(f"No valid SLC entries found in dataset '{name}'")
         else:
-            # Old format: single path or list of paths (no dataset names)
-            df_raw = self.read_listings(slc_listings)
-            if df_raw.height > 0:
-                df_raw = df_raw.with_columns(
-                    pl.lit([], dtype=pl.List(pl.Utf8)).alias(
-                        "dataset(s) d'appartenance"
-                    )
-                )
-                slc_dfs.append(df_raw)
+            logger.info("No SLC datasets found in configuration.")
 
         if not slc_dfs:
-            logger.warning("No valid SLC entries found. The SLC part will be empty.")
             slc_df_raw = pl.DataFrame(
                 schema={
                     "safe_name": pl.Utf8,
@@ -213,27 +503,27 @@ class CatalogueUpdater:
                     "product_type": pl.Utf8,
                     "polarization": pl.Utf8,
                     "start_date": pl.Datetime,
-                    "dataset(s) d'appartenance": pl.List(pl.Utf8),
+                    "datasets": pl.List(pl.Utf8),
                 }
             )
         else:
             slc_df_raw = pl.concat(slc_dfs, how="vertical_relaxed")
 
-        # Build SLC rows
+        # Build SLC rows with all required columns
         slc_df = slc_df_raw.with_columns(
             pl.lit(None, dtype=pl.Utf8).alias("SAFE GRD"),
             pl.lit(None, dtype=pl.Utf8).alias("SAFE OCN"),
             pl.col("safe_name").alias("SAFE SLC"),
-            pl.lit(None, dtype=pl.Utf8).alias("presence SLC"),
-            pl.lit(None, dtype=pl.Utf8).alias("presence GRD"),
-            pl.lit(None, dtype=pl.Utf8).alias("presence OCN"),
-            pl.lit(None, dtype=pl.Utf8).alias("presence L1B XSP A21"),
-            pl.lit(None, dtype=pl.Utf8).alias("presence L1C XSP B17"),
-            # dataset(s) d'appartenance already has the dataset name(s)
-            pl.lit(None, dtype=pl.Float32).alias("Hs WW3"),  # <-- ADD THIS
-            pl.lit(None, dtype=pl.Float32).alias("Tp WW3"),  # <-- ADD THIS
-            pl.lit(None, dtype=pl.Float32).alias("U10 ecmwf"),  # <-- ADD THIS
-            pl.lit(None, dtype=pl.Float32).alias("v10 ecmwf"),  # <-- ADD THIS
+            pl.lit(None, dtype=pl.Utf8).alias("PATH SLC"),
+            pl.lit(None, dtype=pl.Utf8).alias("PATH GRD"),
+            pl.lit(None, dtype=pl.Utf8).alias("PATH OCN"),
+            pl.lit(None, dtype=pl.Utf8).alias("category"),
+            pl.lit(None, dtype=pl.Utf8).alias("PATH L1B XSP A21"),
+            pl.lit(None, dtype=pl.Utf8).alias("PATH L1C XSP B17"),
+            pl.lit(None, dtype=pl.Float32).alias("Hs WW3"),
+            pl.lit(None, dtype=pl.Float32).alias("Tp WW3"),
+            pl.lit(None, dtype=pl.Float32).alias("U10 ecmwf"),
+            pl.lit(None, dtype=pl.Float32).alias("V10 ecmwf"),
             pl.col("start_date").alias("start date SAFE"),
             pl.lit(datetime.datetime.now()).alias("horodating"),
             pl.lit(None, dtype=pl.Utf8).alias("polygon SLC"),
@@ -241,40 +531,27 @@ class CatalogueUpdater:
             pl.lit(None, dtype=pl.Utf8).alias("S3path SLC"),
             pl.lit(None, dtype=pl.Utf8).alias("S3path GRD"),
             pl.col("polarization").alias("polarization"),
-            pl.col("mission").alias("unité"),
+            pl.col("mission").alias("unit"),
         ).select(list(SCHEMA.keys()))
 
-        # GRD listings
-        logger.info("Building catalogue from GRD listings...")
-
+        # ---------- Build GRD rows ----------
         grd_dfs = []
-        if isinstance(grd_listings, dict):
-            for dataset_name, listing_path in grd_listings.items():
-                logger.info(f"Reading GRD dataset '{dataset_name}' from {listing_path}")
-                df_raw = self.read_listings(listing_path)
+        if grd_paths:
+            logger.info(f"Reading {len(grd_paths)} GRD dataset(s)...")
+            for name, path in grd_paths:
+                logger.info(f"Reading GRD dataset '{name}' from {path}")
+                df_raw = self.read_listings(path)
                 if df_raw.height > 0:
                     df_raw = df_raw.with_columns(
-                        pl.lit([dataset_name], dtype=pl.List(pl.Utf8)).alias(
-                            "dataset(s) d'appartenance"
-                        )
+                        pl.lit([name], dtype=pl.List(pl.Utf8)).alias("datasets")
                     )
                     grd_dfs.append(df_raw)
                 else:
-                    logger.warning(
-                        f"No valid GRD entries found in dataset '{dataset_name}'"
-                    )
+                    logger.warning(f"No valid GRD entries found in dataset '{name}'")
         else:
-            df_raw = self.read_listings(grd_listings)
-            if df_raw.height > 0:
-                df_raw = df_raw.with_columns(
-                    pl.lit([], dtype=pl.List(pl.Utf8)).alias(
-                        "dataset(s) d'appartenance"
-                    )
-                )
-                grd_dfs.append(df_raw)
+            logger.info("No GRD datasets found in configuration.")
 
         if not grd_dfs:
-            logger.warning("No valid GRD entries found. The GRD part will be empty.")
             grd_df_raw = pl.DataFrame(
                 schema={
                     "safe_name": pl.Utf8,
@@ -282,26 +559,27 @@ class CatalogueUpdater:
                     "product_type": pl.Utf8,
                     "polarization": pl.Utf8,
                     "start_date": pl.Datetime,
-                    "dataset(s) d'appartenance": pl.List(pl.Utf8),
+                    "datasets": pl.List(pl.Utf8),
                 }
             )
         else:
             grd_df_raw = pl.concat(grd_dfs, how="vertical_relaxed")
 
-        # Build GRD rows
+        # Build GRD rows with all required columns
         grd_df = grd_df_raw.with_columns(
             pl.col("safe_name").alias("SAFE GRD"),
             pl.lit(None, dtype=pl.Utf8).alias("SAFE SLC"),
             pl.lit(None, dtype=pl.Utf8).alias("SAFE OCN"),
-            pl.lit(None, dtype=pl.Utf8).alias("presence SLC"),
-            pl.lit(None, dtype=pl.Utf8).alias("presence GRD"),
-            pl.lit(None, dtype=pl.Utf8).alias("presence OCN"),
-            pl.lit(None, dtype=pl.Utf8).alias("presence L1B XSP A21"),
-            pl.lit(None, dtype=pl.Utf8).alias("presence L1C XSP B17"),
-            pl.lit(None, dtype=pl.Float32).alias("Hs WW3"),  # <-- ADD THIS
-            pl.lit(None, dtype=pl.Float32).alias("Tp WW3"),  # <-- ADD THIS
-            pl.lit(None, dtype=pl.Float32).alias("U10 ecmwf"),  # <-- ADD THIS
-            pl.lit(None, dtype=pl.Float32).alias("v10 ecmwf"),  # <-- ADD THIS
+            pl.lit(None, dtype=pl.Utf8).alias("PATH SLC"),
+            pl.lit(None, dtype=pl.Utf8).alias("PATH GRD"),
+            pl.lit(None, dtype=pl.Utf8).alias("PATH OCN"),
+            pl.lit(None, dtype=pl.Utf8).alias("category"),
+            pl.lit(None, dtype=pl.Utf8).alias("PATH L1B XSP A21"),
+            pl.lit(None, dtype=pl.Utf8).alias("PATH L1C XSP B17"),
+            pl.lit(None, dtype=pl.Float32).alias("Hs WW3"),
+            pl.lit(None, dtype=pl.Float32).alias("Tp WW3"),
+            pl.lit(None, dtype=pl.Float32).alias("U10 ecmwf"),
+            pl.lit(None, dtype=pl.Float32).alias("V10 ecmwf"),
             pl.col("start_date").alias("start date SAFE"),
             pl.lit(datetime.datetime.now()).alias("horodating"),
             pl.lit(None, dtype=pl.Utf8).alias("polygon SLC"),
@@ -309,13 +587,35 @@ class CatalogueUpdater:
             pl.lit(None, dtype=pl.Utf8).alias("S3path SLC"),
             pl.lit(None, dtype=pl.Utf8).alias("S3path GRD"),
             pl.col("polarization").alias("polarization"),
-            pl.col("mission").alias("unité"),
+            pl.col("mission").alias("unit"),
         ).select(list(SCHEMA.keys()))
 
-        # Combine SLC and GRD
+        # ---------- Combine and deduplicate ----------
         combined = pl.concat([slc_df, grd_df], how="vertical_relaxed").unique()
         logger.info(f"Total combined catalogue rows (before dedup): {combined.height}")
         return combined
+
+    @staticmethod
+    def _get_peak_memory_gb() -> float:
+        """
+        Get the peak memory usage of the current process in Gigabytes.
+
+        Reads VmHWM (Peak Resident Set Size) from /proc/self/status.
+        This is the most accurate way to measure peak memory on Linux clusters.
+
+        Returns:
+            Peak memory in GB. Returns 0.0 if unavailable (e.g., non-Linux OS).
+        """
+        try:
+            # Linux specific: read Peak Resident Set Size (VmHWM)
+            with open("/proc/self/status", encoding="utf-8") as f:
+                for line in f:
+                    if line.startswith("VmHWM:"):
+                        # Value is in kB, convert to GB
+                        return int(line.split()[1]) / (1024**2)
+        except FileNotFoundError:
+            pass
+        return 0.0
 
     def _log_catalogue_summary(self, df: pl.DataFrame, step_name: str) -> None:
         """Log a summary of the catalogue state after each step."""
@@ -332,7 +632,7 @@ class CatalogueUpdater:
             f"{slc_count - both_count} SLC-only, {grd_count - both_count} GRD-only, {ocn_count} OCN"
         )
 
-    def link_slc_grd(self, df: pl.DataFrame) -> pl.DataFrame:
+    def core_update(self, df: pl.DataFrame) -> pl.DataFrame:
         """
         Link SLC, GRD, and OCN products using multi-step strategy.
         """
@@ -342,61 +642,148 @@ class CatalogueUpdater:
         start_total = time.time()
 
         # Step 1: Local SLC-GRD matching
-        logger.info("\n📍 Step 1/6: Local SLC-GRD matching...")
+        logger.info("\n📍 Step 1/9: Local SLC-GRD matching...")
         start = time.time()
         df = self._local_link_slc_grd(df)  # type: ignore[assignment]
         elapsed = time.time() - start
         self._log_catalogue_summary(df, "After local matching")
-        logger.info(f"✅ Step 1/6 completed in {elapsed:.1f}s")
+        logger.info(f"✅ Step 1/9 completed in {elapsed:.1f}s")
 
         # Step 2: CDSE fallback for SLC-GRD orphans
-        logger.info("\n📍 Step 2/6: CDSE fallback for SLC-GRD orphans...")
+        logger.info("\n📍 Step 2/9: CDSE fallback for SLC-GRD orphans...")
         start = time.time()
         df = self._cdse_fallback_link(df)
         df = self._merge_linked_rows(df)
         elapsed = time.time() - start
         self._log_catalogue_summary(df, "After CDSE fallback")
-        logger.info(f"✅ Step 2/6 completed in {elapsed:.1f}s")
+        logger.info(f"✅ Step 2/9 completed in {elapsed:.1f}s")
 
         # Step 3: Link OCN to GRD (primary)
-        logger.info("\n📍 Step 3/6: Linking OCN to GRD products...")
+        logger.info("\n📍 Step 3/9: Linking OCN to GRD products...")
         start = time.time()
         df = self._link_ocn_to_grd(df)
         elapsed = time.time() - start
         self._log_catalogue_summary(df, "After OCN-GRD linking")
-        logger.info(f"✅ Step 3/6 completed in {elapsed:.1f}s")
+        logger.info(f"✅ Step 3/9 completed in {elapsed:.1f}s")
 
         # Step 4: Fallback - Link OCN to SLC
-        logger.info("\n📍 Step 4/6: Fallback - Linking OCN to SLC...")
+        logger.info("\n📍 Step 4/9: Fallback - Linking OCN to SLC...")
         start = time.time()
         df = self._link_ocn_to_slc(df)
         elapsed = time.time() - start
         self._log_catalogue_summary(df, "After OCN-SLC fallback")
-        logger.info(f"✅ Step 4/6 completed in {elapsed:.1f}s")
+        logger.info(f"✅ Step 4/9 completed in {elapsed:.1f}s")
 
         # Step 5: Fetch polygons and S3 paths from CDSE
-        logger.info("\n📍 Step 5/6: Fetching polygons and S3 paths from CDSE...")
+        logger.info("\n📍 Step 5/9: Fetching polygons and S3 paths from CDSE...")
         start = time.time()
         df = self._update_polygons_and_s3paths(df)
         elapsed = time.time() - start
         self._log_catalogue_summary(df, "After polygon fetch")
-        logger.info(f"✅ Step 5/6 completed in {elapsed:.1f}s")
+        logger.info(f"✅ Step 5/9 completed in {elapsed:.1f}s")
 
         # Step 6: Check presence on Ifremer storage (including OCN)
-        logger.info("\n📍 Step 6/6: Checking presence on Ifremer storage...")
+        logger.info("\n📍 Step 6/9: Checking presence on Ifremer storage...")
         start = time.time()
         df = self._update_presence_columns(df, force=False)
         elapsed = time.time() - start
         self._log_catalogue_summary(df, "After presence check")
-        logger.info(f"✅ Step 6/6 completed in {elapsed:.1f}s")
+        logger.info(f"✅ Step 6/9 completed in {elapsed:.1f}s")
+
+        # Step 7: Check derived products (L1B, L1C, L2WAV)
+        logger.info("\n📍 Step 7/9: Checking derived products (L1B, L1C, L2WAV)...")
+        start = time.time()
+        df = self._update_derived_products(df)
+        elapsed = time.time() - start
+        self._log_catalogue_summary(df, "After derived products")
+        logger.info(f"✅ Step 7/9 completed in {elapsed:.1f}s")
+
+        # Step 8: Add WW3 wave data
+        logger.info("\n📍 Step 8/9: Adding WW3 wave data...")
+        start = time.time()
+        df = self.update_with_ww3(df, n_jobs=6, force_update=False, verbose=True)
+        elapsed = time.time() - start
+        self._log_catalogue_summary(df, "After WW3 extraction")
+        logger.info(f"✅ Step 8/9 completed in {elapsed:.1f}s")
+
+        # Step 9: Add ECMWF 10m wind data
+        logger.info("\n📍 Step 9/9: Adding ECMWF 10m wind data...")
+        start = time.time()
+        df = self.update_with_ecmwf(df, n_jobs=6, force_update=False, verbose=True)
+        elapsed = time.time() - start
+        self._log_catalogue_summary(df, "After ECMWF extraction")
+        logger.info(f"✅ Step 9/9 completed in {elapsed:.1f}s")
 
         total_elapsed = time.time() - start_total
+        peak_mem_gb = self._get_peak_memory_gb()
+
         logger.info("=" * 60)
         logger.info(f"🏁 SLC-GRD-OCN linking complete in {total_elapsed:.1f}s")
+        if peak_mem_gb > 0:
+            logger.info(f"🧠 Peak memory consumption: {peak_mem_gb:.2f} Go")
         logger.info(f"📊 Final catalogue shape: {df.shape}")
         logger.info("=" * 60)
 
         return df
+
+    def _batch_cdse_match(
+        self,
+        source_ids: list[str],
+        target_type: str,
+        output_file: str | None = None,
+        checkpoint_dir: Path | None = None,
+        cleanup_on_success: bool = False,
+    ) -> dict[str, str]:
+        if not source_ids:
+            return {}
+
+        from cdsodatacli.scripts.match_s1_product_types import entrypoint
+
+        if checkpoint_dir is None:
+            checkpoint_dir = self._get_checkpoint_dir()
+            if checkpoint_dir is None:
+                # If checkpoint dir creation fails, use a temp directory
+                import tempfile
+
+                checkpoint_dir = Path(tempfile.mkdtemp())
+                logger.warning(
+                    f"Using temporary checkpoint directory: {checkpoint_dir}"
+                )
+
+        if output_file is None:
+            # Deterministic filename based on sorted IDs and target type
+            sorted_ids = sorted(source_ids)
+            hash_obj = hashlib.md5("".join(sorted_ids).encode())
+            hash_hex = hash_obj.hexdigest()[:8]
+            output_file = f"batch_{target_type}_{hash_hex}.txt"
+            # Place it in the checkpoint directory
+            output_file = (
+                str(Path(checkpoint_dir) / output_file)
+                if checkpoint_dir
+                else output_file
+            )
+
+        results = entrypoint(
+            safe_list=source_ids,
+            target_type=target_type,
+            output_filename=output_file,
+            logger=logger,
+            checkpoint_dir=str(checkpoint_dir) if checkpoint_dir else None,
+        )
+
+        mapping = {}
+        for r in results:
+            if "target_name" in r and "source_id" in r:
+                mapping[r["source_id"]] = r["target_name"]
+
+        # Optionally remove the output file if you don't need it
+        if cleanup_on_success and output_file and Path(output_file).exists():
+            try:
+                Path(output_file).unlink()
+            except:
+                pass
+
+        return mapping
 
     def _local_link_slc_grd(self, df: pl.DataFrame) -> pl.DataFrame | None:
         """
@@ -492,7 +879,7 @@ class CatalogueUpdater:
             {}
         )  # (mission, pol, data_take_id) -> list of (slc_name, start_time)
         for row in slc_rows.to_dicts():
-            mission = row.get("unité", "")
+            mission = row.get("unit", "")
             pol = row.get("polarization", "")
             data_take_id = row.get("data_take_id", "")
             start_time = row.get("start_time")
@@ -514,7 +901,7 @@ class CatalogueUpdater:
         # For each GRD, find best matching SLC
         for grd_row in grd_rows.to_dicts():
             grd_name = grd_row["SAFE GRD"]
-            grd_mission = grd_row.get("unité", "")
+            grd_mission = grd_row.get("unit", "")
             grd_pol = grd_row.get("polarization", "")
             grd_data_take_id = grd_row.get("data_take_id", "")
             grd_start_time = grd_row.get("start_time")
@@ -628,7 +1015,7 @@ class CatalogueUpdater:
         Convert GRD naming pattern to expected SLC pattern with a time offset.
         offset_seconds can be negative or positive.
         """
-        slc_name = grd_name.replace("_GRDH_", "_SLC__").replace("_GRD_", "_SLC_")
+        slc_name = grd_name.replace("_GRDH_", "_SLC__").replace("_GRDH", "_SLC_")
 
         def adjust_timestamp(match):
             dt = datetime.datetime.strptime(match.group(0), "%Y%m%dT%H%M%S")
@@ -645,7 +1032,7 @@ class CatalogueUpdater:
         Convert SLC naming pattern to expected GRD pattern with a time offset.
         offset_seconds can be negative or positive.
         """
-        grd_name = slc_name.replace("_SLC__", "_GRDH_").replace("_SLC_", "_GRD_")
+        grd_name = slc_name.replace("_SLC__", "_GRDH_").replace("_SLC_", "_GRDH")
 
         def adjust_timestamp(match):
             dt = datetime.datetime.strptime(match.group(0), "%Y%m%dT%H%M%S")
@@ -658,6 +1045,7 @@ class CatalogueUpdater:
     def _cdse_fallback_link(self, df: pl.DataFrame) -> pl.DataFrame:
         """
         For rows still missing links, query CDSE using cdsodatacli.
+        Now uses the multithreaded entrypoint for GRD→SLC and SLC→GRD in batches.
         """
         logger.info("Step 2: CDSE fallback for orphan products...")
 
@@ -677,67 +1065,60 @@ class CatalogueUpdater:
             f"Found {grd_orphans.height} GRD orphans and {slc_orphans.height} SLC orphans (total {total_orphans})"
         )
 
-        # Process GRD orphans
-        updates_grd = {}
-        for row in grd_orphans.to_dicts():
-            grd_name = row["SAFE GRD"]
-            try:
-                slc_name = self._call_cdse_get_parent_slc(grd_name)
-                if slc_name:
-                    updates_grd[grd_name] = slc_name
-                    logger.info(f"CDSE found parent SLC for {grd_name} -> {slc_name}")
-                else:
-                    logger.warning(f"CDSE could not find SLC for {grd_name}")
-            except Exception as e:
-                logger.error(f"CDSE error for {grd_name}: {e}")
+        # Initialize mapping variables to avoid UnboundLocalError
+        mapping_grd_to_slc = {}
+        mapping_slc_to_grd = {}
 
-        # Apply updates for GRD orphans (code unchanged)
-        for grd_name, slc_name in updates_grd.items():
-            df = df.with_columns(
-                pl.when(pl.col("SAFE GRD") == grd_name)
-                .then(pl.lit(slc_name))
-                .otherwise(pl.col("SAFE SLC"))
-                .alias("SAFE SLC")
+        # Process GRD→SLC in batch
+        if grd_orphans.height > 0:
+            grd_ids = [row["SAFE GRD"] for row in grd_orphans.to_dicts()]
+            logger.info(f"Batch matching {len(grd_ids)} GRD orphans to SLC...")
+            mapping_grd_to_slc = self._batch_cdse_match(grd_ids, "SLC_")
+            logger.info(
+                f"Found SLC for {len(mapping_grd_to_slc)}/{len(grd_ids)} GRD orphans"
             )
-            df = df.with_columns(
-                pl.when(pl.col("SAFE SLC") == slc_name)
-                .then(pl.lit(grd_name))
-                .otherwise(pl.col("SAFE GRD"))
-                .alias("SAFE GRD")
-            )
+            for grd_name, slc_name in mapping_grd_to_slc.items():
+                df = df.with_columns(
+                    pl.when(pl.col("SAFE GRD") == grd_name)
+                    .then(pl.lit(slc_name))
+                    .otherwise(pl.col("SAFE SLC"))
+                    .alias("SAFE SLC")
+                )
+                df = df.with_columns(
+                    pl.when(pl.col("SAFE SLC") == slc_name)
+                    .then(pl.lit(grd_name))
+                    .otherwise(pl.col("SAFE GRD"))
+                    .alias("SAFE GRD")
+                )
 
-        # Process SLC orphans
-        updates_slc = {}
-        for row in slc_orphans.to_dicts():
-            slc_name = row["SAFE SLC"]
-            if any(grd for grd, slc in updates_grd.items() if slc == slc_name):
-                continue
-            try:
-                grd_name = self._call_cdse_get_derived_grd(slc_name)
-                if grd_name:
-                    updates_slc[slc_name] = grd_name
-                    logger.debug(f"CDSE found derived GRD for {slc_name} -> {grd_name}")
-                else:
-                    logger.warning(f"CDSE could not find GRD for {slc_name}")
-            except Exception as e:
-                logger.error(f"CDSE error for {slc_name}: {e}")
+        # Process SLC→GRD in batch
+        if slc_orphans.height > 0:
+            slc_ids = [row["SAFE SLC"] for row in slc_orphans.to_dicts()]
+            already_linked = set(mapping_grd_to_slc.values())
+            slc_ids_to_match = [s for s in slc_ids if s not in already_linked]
+            if slc_ids_to_match:
+                logger.info(
+                    f"Batch matching {len(slc_ids_to_match)} SLC orphans to GRD..."
+                )
+                mapping_slc_to_grd = self._batch_cdse_match(slc_ids_to_match, "GRDH")
+                logger.info(
+                    f"Found GRD for {len(mapping_slc_to_grd)}/{len(slc_ids_to_match)} SLC orphans"
+                )
+                for slc_name, grd_name in mapping_slc_to_grd.items():
+                    df = df.with_columns(
+                        pl.when(pl.col("SAFE SLC") == slc_name)
+                        .then(pl.lit(grd_name))
+                        .otherwise(pl.col("SAFE GRD"))
+                        .alias("SAFE GRD")
+                    )
+                    df = df.with_columns(
+                        pl.when(pl.col("SAFE GRD") == grd_name)
+                        .then(pl.lit(slc_name))
+                        .otherwise(pl.col("SAFE SLC"))
+                        .alias("SAFE SLC")
+                    )
 
-        # Apply updates for SLC orphans (code unchanged)
-        for slc_name, grd_name in updates_slc.items():
-            df = df.with_columns(
-                pl.when(pl.col("SAFE SLC") == slc_name)
-                .then(pl.lit(grd_name))
-                .otherwise(pl.col("SAFE GRD"))
-                .alias("SAFE GRD")
-            )
-            df = df.with_columns(
-                pl.when(pl.col("SAFE GRD") == grd_name)
-                .then(pl.lit(slc_name))
-                .otherwise(pl.col("SAFE SLC"))
-                .alias("SAFE SLC")
-            )
-
-        total_updates = len(updates_grd) + len(updates_slc)
+        total_updates = len(mapping_grd_to_slc) + len(mapping_slc_to_grd)
         resolved_percentage = (
             (total_updates / total_orphans * 100) if total_orphans > 0 else 0.0
         )
@@ -791,7 +1172,7 @@ class CatalogueUpdater:
             logger.warning(f"cdsodatacli not installed: {e}. CDSE fallback disabled.")
             return None
 
-        target_type = "GRD_"  # Valid type for GRD
+        target_type = "GRDH"  # Valid type for GRD
         delta_dist: defaultdict[str, int] = defaultdict(int)
 
         try:
@@ -815,36 +1196,158 @@ class CatalogueUpdater:
             logger.error(f"CDSE query failed for {slc_name}: {e}")
             return None
 
-    def find_new_safe(
+    def _get_category_priority(self, category: str) -> int:
+        """Return priority (higher = more important) for category."""
+        priorities = {"undefined": 0, "train": 1, "val": 2, "test": 3}
+        return priorities.get(category.lower(), 0)
+
+    def _compute_category_and_conflicts(
         self,
-        existing_df: pl.DataFrame,
-        slc_listing: str | Path | list[str],
-        grd_listing: str | Path | list[str],
+        df: pl.DataFrame,
+        dataset_metadata: dict[str, dict],
+        output_path: Path | None = None,
     ) -> pl.DataFrame:
-        """Identify SAFE not yet present in the catalogue."""
-        new_raw = self.build_from_listings(slc_listing if isinstance(slc_listing, (str, Path, list, dict)) else [], grd_listing if isinstance(grd_listing, (str, Path, list, dict)) else [])  # type: ignore[arg-type]
-        if existing_df.height == 0:
-            return new_raw
+        """
+        Add category column based on dataset list and priority hierarchy.
+        Writes conflict report if multiple categories conflict.
+        """
+        # Build mapping: dataset_name -> category
+        category_map = {}
+        for name, info in dataset_metadata.items():
+            if isinstance(info, dict) and "category" in info:
+                category_map[name] = info["category"]
+            else:
+                category_map[name] = "undefined"
 
-        existing_slc = set(
-            existing_df.filter(pl.col("SAFE SLC").is_not_null())["SAFE SLC"].to_list()
-        )
-        existing_grd = set(
-            existing_df.filter(pl.col("SAFE GRD").is_not_null())["SAFE GRD"].to_list()
-        )
+        # Process each row
+        new_categories = []
+        conflicts = []
 
-        new_rows = []
-        for row in new_raw.to_dicts():
-            if row["SAFE SLC"] and row["SAFE SLC"] not in existing_slc:
-                new_rows.append(row)
-            elif row["SAFE GRD"] and row["SAFE GRD"] not in existing_grd:
-                new_rows.append(row)
+        for row in df.to_dicts():
+            datasets = row.get("datasets", [])
+            if not datasets:
+                new_categories.append("undefined")
+                continue
 
-        if not new_rows:
-            logger.info("No new SAFE found.")
-            return pl.DataFrame(schema=SCHEMA)
-        logger.info(f"Found {len(new_rows)} new SAFE entries.")
-        return pl.DataFrame(new_rows, schema=SCHEMA)
+            # Collect unique categories with priorities
+            cat_set = set()
+            for ds in datasets:
+                cat = category_map.get(ds, "undefined")
+                cat_set.add(cat)
+
+            # If only one category, use it
+            if len(cat_set) == 1:
+                new_categories.append(cat_set.pop())
+            else:
+                # Choose highest priority
+                best_cat = max(cat_set, key=self._get_category_priority)
+                new_categories.append(best_cat)
+
+                # Log conflict if more than one distinct category
+                if len(cat_set) > 1:
+                    safe_name = (
+                        row.get("SAFE SLC")
+                        or row.get("SAFE GRD")
+                        or row.get("SAFE OCN")
+                    )
+                    conflicts.append(
+                        {
+                            "safe": safe_name,
+                            "datasets": datasets,
+                            "categories": list(cat_set),
+                            "chosen": best_cat,
+                        }
+                    )
+
+        # Add column
+        df = df.with_columns(pl.Series(new_categories).alias("category"))
+
+        # Write conflicts if any and output_path provided
+        if conflicts and output_path:
+            self._write_conflicts(conflicts, output_path)
+
+        return df
+
+    def _write_conflicts(self, conflicts: list[dict], catalogue_path: Path) -> None:
+        """Write conflict report to a file in the same directory as the catalogue."""
+        import json
+        from datetime import datetime
+
+        conflict_dir = catalogue_path.parent
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        conflict_file = conflict_dir / f"conflicts_{timestamp}.txt"
+
+        with open(conflict_file, "w") as f:
+            f.write(f"Catalogue: {catalogue_path}\n")
+            f.write(f"Timestamp: {datetime.now().isoformat()}\n")
+            f.write("=" * 60 + "\n")
+            f.write(f"Total conflicts: {len(conflicts)}\n")
+            f.write("-" * 60 + "\n")
+            for c in conflicts:
+                f.write(f"SAFE: {c['safe']}\n")
+                f.write(f"  Datasets: {c['datasets']}\n")
+                f.write(f"  Categories: {c['categories']}\n")
+                f.write(f"  Chosen: {c['chosen']}\n")
+                f.write("\n")
+
+        logger.info(f"Conflict report written to {conflict_file}")
+
+    # def find_new_safe(
+    #     self,
+    #     existing_df: pl.DataFrame,
+    #     slc_listing: str | Path | list[str],
+    #     grd_listing: str | Path | list[str],
+    # ) -> pl.DataFrame:
+    #     """Identify SAFE not yet present in the catalogue."""
+    #     new_raw = self.build_from_listings(slc_listing if isinstance(slc_listing, (str, Path, list, dict)) else [], grd_listing if isinstance(grd_listing, (str, Path, list, dict)) else [])  # type: ignore[arg-type]
+    #     if existing_df.height == 0:
+    #         return new_raw
+
+    #     existing_slc = set(
+    #         existing_df.filter(pl.col("SAFE SLC").is_not_null())["SAFE SLC"].to_list()
+    #     )
+    #     existing_grd = set(
+    #         existing_df.filter(pl.col("SAFE GRD").is_not_null())["SAFE GRD"].to_list()
+    #     )
+
+    #     new_rows = []
+    #     for row in new_raw.to_dicts():
+    #         if row["SAFE SLC"] and row["SAFE SLC"] not in existing_slc:
+    #             new_rows.append(row)
+    #         elif row["SAFE GRD"] and row["SAFE GRD"] not in existing_grd:
+    #             new_rows.append(row)
+
+    #     if not new_rows:
+    #         logger.info("No new SAFE found.")
+    #         return pl.DataFrame(schema=SCHEMA)
+    #     logger.info(f"Found {len(new_rows)} new SAFE entries.")
+    #     return pl.DataFrame(new_rows, schema=SCHEMA)
+
+    def _extract_category_value(self, cat) -> str | None:
+        """Extract a single category string from various possible formats."""
+        if cat is None:
+            return None
+
+        # Si c'est une liste, essayons de l'aplatir
+        if isinstance(cat, list):
+            # Si la liste a un seul élément et que c'est une liste, aplatir
+            if len(cat) == 1 and isinstance(cat[0], list):
+                cat = cat[0]
+
+            # Si on a maintenant une liste de chaînes
+            if isinstance(cat, list) and len(cat) > 0:
+                # Si c'est une chaîne, la retourner
+                if isinstance(cat[0], str):
+                    return cat[0]
+                # Si c'est une liste de listes, aplatir plus
+                if isinstance(cat[0], list):
+                    return self._extract_category_value(cat[0])
+            return None
+
+        if isinstance(cat, str) and cat:
+            return cat
+
+        return None
 
     def _merge_linked_rows(self, df: pl.DataFrame) -> pl.DataFrame:
         """
@@ -870,13 +1373,9 @@ class CatalogueUpdater:
         logger.info(f"Found {linked_rows.height} rows with both SLC and GRD.")
         logger.info(f"Keeping {unlinked_rows.height} unlinked rows unchanged.")
 
-        # For dataset merging, we need to handle empty lists carefully.
-        # First, create a temporary column with all datasets concatenated
-        # Then explode, get unique, and aggregate back
-
-        # Convert the linked rows to a list of dictionaries and process manually
-        # This is simpler and more reliable for this specific operation
         rows = linked_rows.to_dicts()
+
+        # FIX #2: More robust category extraction
 
         merged_rows = []
         # Group by (SAFE SLC, SAFE GRD) pair
@@ -894,13 +1393,13 @@ class CatalogueUpdater:
             # Merge datasets from all rows
             all_datasets = set()
             for r in rows_list:
-                datasets = r.get("dataset(s) d'appartenance", [])
+                datasets = r.get("datasets", [])
                 if datasets:
                     all_datasets.update(datasets)
-            merged["dataset(s) d'appartenance"] = list(all_datasets)
+            merged["datasets"] = list(all_datasets)
 
             # Merge meteo: take first non-null
-            for meteo_col in ["Hs WW3", "Tp WW3", "U10 ecmwf", "v10 ecmwf"]:
+            for meteo_col in ["Hs WW3", "Tp WW3", "U10 ecmwf", "V10 ecmwf"]:
                 for r in rows_list:
                     val = r.get(meteo_col)
                     if val is not None:
@@ -933,8 +1432,35 @@ class CatalogueUpdater:
                         merged[poly_col] = val
                         break
 
-            # SAFE OCN is always None
-            merged["SAFE OCN"] = None
+            # Merge OCN-related columns by taking first non-null
+            safe_ocn_val = None
+            for r in rows_list:
+                val = r.get("SAFE OCN")
+                if val is not None:
+                    safe_ocn_val = val
+                    break
+            merged["SAFE OCN"] = safe_ocn_val
+
+            presence_ocn_val = None
+            for r in rows_list:
+                val = r.get("PATH OCN")
+                if val is not None:
+                    presence_ocn_val = val
+                    break
+            merged["PATH OCN"] = presence_ocn_val
+
+            # Merge category: take highest priority
+            all_cats = []
+            for r in rows_list:
+                cat = self._extract_category_value(r.get("category"))
+                if cat:
+                    all_cats.append(cat)
+
+            if all_cats:
+                best_cat = max(all_cats, key=self._get_category_priority)
+                merged["category"] = best_cat
+            else:
+                merged["category"] = None
 
             merged_rows.append(merged)
 
@@ -1030,7 +1556,6 @@ class CatalogueUpdater:
         try:
             import geopandas as gpd
             import pandas as pd
-            import shapely
             from cdsodatacli.query import fetch_data
             from shapely.geometry import box
         except ImportError as e:
@@ -1040,7 +1565,7 @@ class CatalogueUpdater:
             return df
 
         # Get cache directory from config if available
-        cache_dir = self.config.get("cdse_cache_dir", None)
+        cache_dir = self._config.get("cdse_cache_dir", None)
         if cache_dir:
             cache_dir = Path(cache_dir)
             logger.info(f"Using CDSE cache directory: {cache_dir}")
@@ -1098,7 +1623,7 @@ class CatalogueUpdater:
                     parsed = self.parse_safe_name(safe_name)
                     start_date = parsed["start_date"]
                     end_date = parsed["end_date"]
-                    mission = parsed["mission"]
+                    # mission = parsed["mission"]
                     product_type = parsed["product_type"]
 
                     # Explicitly set the product type filter to match the product type
@@ -1141,16 +1666,18 @@ class CatalogueUpdater:
 
             try:
                 # Pass cache_dir to fetch_data if configured
-                result_df = fetch_data(
-                    gdf=gdf,
-                    timedelta_slice=datetime.timedelta(days=1),
-                    top=1000,
-                    querymode="seq",
-                    cache_dir=(
-                        str(cache_dir) if cache_dir else None
-                    ),  # <-- Added cache_dir support
-                    display_tqdm=False,
-                )
+                with open(os.devnull, "w") as devnull:
+                    with contextlib.redirect_stdout(devnull):
+                        result_df = fetch_data(
+                            gdf=gdf,
+                            timedelta_slice=datetime.timedelta(days=1),
+                            top=1000,
+                            querymode="multi",
+                            cache_dir=(
+                                str(cache_dir) if cache_dir else None
+                            ),  # <-- Added cache_dir support
+                            display_tqdm=False,
+                        )
                 if result_df is not None and not result_df.empty:
                     all_results.append(result_df)
                     logger.info(
@@ -1285,6 +1812,19 @@ class CatalogueUpdater:
 
         return df
 
+    def _get_checkpoint_dir(self) -> Path | None:
+        """Return a checkpoint directory path based on the catalogue output path."""
+        # Fix: use self._config instead of self.config
+        catalogue_path = (
+            self._config.get("paths", {}).get("output", {}).get("catalogue")
+        )
+        if not catalogue_path:
+            return None
+        base_dir = Path(catalogue_path).parent
+        checkpoint_dir = base_dir / "checkpoints"
+        checkpoint_dir.mkdir(parents=True, exist_ok=True)
+        return checkpoint_dir
+
     # ---------- Placeholders for future implementation ----------
     def _update_presence_columns(
         self, df: pl.DataFrame, force: bool = False
@@ -1302,7 +1842,7 @@ class CatalogueUpdater:
             return df
 
         # Get s1ifr config file path from the main config
-        s1ifr_config_path = self.config.get("s1ifr-config-file", None)
+        s1ifr_config_path = self._config.get("s1ifr-config-file", None)
         if s1ifr_config_path:
             logger.info(f"Using s1ifr config file: {s1ifr_config_path}")
 
@@ -1318,7 +1858,7 @@ class CatalogueUpdater:
                 if "paths" in s1ifr_config:
                     potential_archives = ["datawork", "scale"]
                     for key in s1ifr_config["paths"].keys():
-<<<<<<< HEAD
+
                         if key not in potential_archives and isinstance(
                             s1ifr_config["paths"][key], dict
                         ):
@@ -1327,10 +1867,7 @@ class CatalogueUpdater:
                                 "archive" in k.lower()
                                 for k in s1ifr_config["paths"][key].keys()
                             ):
-=======
-                        if key not in potential_archives and isinstance(s1ifr_config["paths"][key], dict):
-                            if any("archive" in k.lower() for k in s1ifr_config["paths"][key].keys()):
->>>>>>> origin/main
+
                                 potential_archives.append(key)
                     archive_names = potential_archives
                     logger.info(f"Found archives in s1ifr config: {archive_names}")
@@ -1346,27 +1883,21 @@ class CatalogueUpdater:
             ocn_rows = df.filter(pl.col("SAFE OCN").is_not_null())  # <-- ADDED
         else:
             slc_rows = df.filter(
-                pl.col("SAFE SLC").is_not_null() & pl.col("presence SLC").is_null()
+                pl.col("SAFE SLC").is_not_null() & pl.col("PATH SLC").is_null()
             )
             grd_rows = df.filter(
-                pl.col("SAFE GRD").is_not_null() & pl.col("presence GRD").is_null()
+                pl.col("SAFE GRD").is_not_null() & pl.col("PATH GRD").is_null()
             )
-<<<<<<< HEAD
+
+            ocn_rows = df.filter(  # <-- ADDED
+                pl.col("SAFE OCN").is_not_null() & pl.col("PATH OCN").is_null()
+            )
 
         logger.info(
-            f"Checking presence for {slc_rows.height} SLC and {grd_rows.height} GRD products."
+            f"Checking presence for {slc_rows.height} SLC, {grd_rows.height} GRD, and {ocn_rows.height} OCN products."
         )
 
         def find_product_path(safe_name: str, product_type: str) -> str | None:
-=======
-            ocn_rows = df.filter(  # <-- ADDED
-                pl.col("SAFE OCN").is_not_null() & pl.col("presence OCN").is_null()
-            )
-        
-        logger.info(f"Checking presence for {slc_rows.height} SLC, {grd_rows.height} GRD, and {ocn_rows.height} OCN products.")
-        
-        def find_product_path(safe_name: str, product_type: str) -> Optional[str]:
->>>>>>> origin/main
             """Find product path by checking all archives sequentially."""
             for archive_name in archive_names:
                 try:
@@ -1398,22 +1929,18 @@ class CatalogueUpdater:
         for row in grd_rows.to_dicts():
             safe_name = row["SAFE GRD"]
             grd_presence[safe_name] = find_product_path(safe_name, "GRD")
-<<<<<<< HEAD
 
-=======
-        
         # Check OCN products  # <-- ADDED
         ocn_presence = {}
         for row in ocn_rows.to_dicts():
             safe_name = row["SAFE OCN"]
             ocn_presence[safe_name] = find_product_path(safe_name, "OCN")
-        
->>>>>>> origin/main
+
         # Update SLC presence column
         df = df.with_columns(
             pl.when(
                 pl.col("SAFE SLC").is_not_null()
-                & (pl.col("presence SLC").is_null() | pl.lit(force))
+                & (pl.col("PATH SLC").is_null() | pl.lit(force))
             )
             .then(
                 pl.struct(["SAFE SLC"]).map_elements(
@@ -1423,15 +1950,15 @@ class CatalogueUpdater:
                     return_dtype=pl.Utf8,
                 )
             )
-            .otherwise(pl.col("presence SLC"))
-            .alias("presence SLC")
+            .otherwise(pl.col("PATH SLC"))
+            .alias("PATH SLC")
         )
 
         # Update GRD presence column
         df = df.with_columns(
             pl.when(
                 pl.col("SAFE GRD").is_not_null()
-                & (pl.col("presence GRD").is_null() | pl.lit(force))
+                & (pl.col("PATH GRD").is_null() | pl.lit(force))
             )
             .then(
                 pl.struct(["SAFE GRD"]).map_elements(
@@ -1441,66 +1968,56 @@ class CatalogueUpdater:
                     return_dtype=pl.Utf8,
                 )
             )
-            .otherwise(pl.col("presence GRD"))
-            .alias("presence GRD")
+            .otherwise(pl.col("PATH GRD"))
+            .alias("PATH GRD")
         )
-<<<<<<< HEAD
 
-        # Count how many were found
-        found_slc = df.filter(
-            pl.col("SAFE SLC").is_not_null() & pl.col("presence SLC").is_not_null()
-        ).height
-        found_grd = df.filter(
-            pl.col("SAFE GRD").is_not_null() & pl.col("presence GRD").is_not_null()
-        ).height
-        total_slc = df.filter(pl.col("SAFE SLC").is_not_null()).height
-        total_grd = df.filter(pl.col("SAFE GRD").is_not_null()).height
-
-=======
-        
         # Update OCN presence column  # <-- ADDED
         df = df.with_columns(
             pl.when(
-                pl.col("SAFE OCN").is_not_null() & 
-                (pl.col("presence OCN").is_null() | pl.lit(force))
+                pl.col("SAFE OCN").is_not_null()
+                & (pl.col("PATH OCN").is_null() | pl.lit(force))
             )
             .then(
-                pl.struct(["SAFE OCN"])
-                .map_elements(
-                    lambda x: ocn_presence.get(x["SAFE OCN"]) if x["SAFE OCN"] else None,
-                    return_dtype=pl.Utf8
+                pl.struct(["SAFE OCN"]).map_elements(
+                    lambda x: (
+                        ocn_presence.get(x["SAFE OCN"]) if x["SAFE OCN"] else None
+                    ),
+                    return_dtype=pl.Utf8,
                 )
             )
-            .otherwise(pl.col("presence OCN"))
-            .alias("presence OCN")
+            .otherwise(pl.col("PATH OCN"))
+            .alias("PATH OCN")
         )
-        
+
         # Count how many were found
-        found_slc = df.filter(pl.col("SAFE SLC").is_not_null() & pl.col("presence SLC").is_not_null()).height
-        found_grd = df.filter(pl.col("SAFE GRD").is_not_null() & pl.col("presence GRD").is_not_null()).height
-        found_ocn = df.filter(pl.col("SAFE OCN").is_not_null() & pl.col("presence OCN").is_not_null()).height  # <-- ADDED
-        
+        found_slc = df.filter(
+            pl.col("SAFE SLC").is_not_null() & pl.col("PATH SLC").is_not_null()
+        ).height
+        found_grd = df.filter(
+            pl.col("SAFE GRD").is_not_null() & pl.col("PATH GRD").is_not_null()
+        ).height
+        found_ocn = df.filter(
+            pl.col("SAFE OCN").is_not_null() & pl.col("PATH OCN").is_not_null()
+        ).height  # <-- ADDED
+
         total_slc = df.filter(pl.col("SAFE SLC").is_not_null()).height
         total_grd = df.filter(pl.col("SAFE GRD").is_not_null()).height
         total_ocn = df.filter(pl.col("SAFE OCN").is_not_null()).height  # <-- ADDED
-        
->>>>>>> origin/main
+
         if total_slc > 0:
             logger.info(
                 f"Found {found_slc}/{total_slc} SLC products on Ifremer storage ({found_slc/total_slc*100:.1f}%)"
             )
         if total_grd > 0:
-<<<<<<< HEAD
             logger.info(
                 f"Found {found_grd}/{total_grd} GRD products on Ifremer storage ({found_grd/total_grd*100:.1f}%)"
             )
-
-=======
-            logger.info(f"Found {found_grd}/{total_grd} GRD products on Ifremer storage ({found_grd/total_grd*100:.1f}%)")
         if total_ocn > 0:  # <-- ADDED
-            logger.info(f"Found {found_ocn}/{total_ocn} OCN products on Ifremer storage ({found_ocn/total_ocn*100:.1f}%)")
-        
->>>>>>> origin/main
+            logger.info(
+                f"Found {found_ocn}/{total_ocn} OCN products on Ifremer storage ({found_ocn/total_ocn*100:.1f}%)"
+            )
+
         return df
 
     def _update_derived_products(self, df: pl.DataFrame) -> pl.DataFrame:
@@ -1521,12 +2038,12 @@ class CatalogueUpdater:
             return df
 
         # Get s1ifr config file path from the main config
-        s1ifr_config_path = self.config.get("s1ifr-config-file", None)
+        s1ifr_config_path = self._config.get("s1ifr-config-file", None)
         if s1ifr_config_path:
             logger.info(f"Using s1ifr config file: {s1ifr_config_path}")
 
         # Get product versions from config or use defaults
-        product_versions = self.config.get("product_versions", {})
+        product_versions = self._config.get("product_versions", {})
         l1b_versions = product_versions.get("l1b", ["A21", "A23"])
         l1c_versions = product_versions.get("l1c", ["B17", "B21"])
         # L2WAV versions are handled by s1ifr defaults if not specified
@@ -1545,10 +2062,10 @@ class CatalogueUpdater:
         # Build list of columns to check
         derived_cols = []
         for v in l1b_versions:
-            derived_cols.append(f"presence L1B XSP {v}")
+            derived_cols.append(f"PATH L1B XSP {v}")
         for v in l1c_versions:
-            derived_cols.append(f"presence L1C XSP {v}")
-        derived_cols.extend(["presence L2 WAV E11", "presence L2 WAV E13"])
+            derived_cols.append(f"PATH L1C XSP {v}")
+        derived_cols.extend(["PATH L2 WAV E11", "PATH L2 WAV E13"])
 
         # Only process SLCs that are missing at least one derived product
         # Build condition: any derived column is NULL
@@ -1602,11 +2119,11 @@ class CatalogueUpdater:
         # Map s1ifr column names to catalogue column names
         col_mapping = {}
         for v in l1b_versions:
-            col_mapping[f"L1B_XSP_{v}"] = f"presence L1B XSP {v}"
+            col_mapping[f"L1B_XSP_{v}"] = f"PATH L1B XSP {v}"
         for v in l1c_versions:
-            col_mapping[f"L1C_XSP_{v}"] = f"presence L1C XSP {v}"
-        col_mapping["L2_WAV_E11"] = "presence L2 WAV E11"
-        col_mapping["L2_WAV_E13"] = "presence L2 WAV E13"
+            col_mapping[f"L1C_XSP_{v}"] = f"PATH L1C XSP {v}"
+        col_mapping["L2_WAV_E11"] = "PATH L2 WAV E11"
+        col_mapping["L2_WAV_E13"] = "PATH L2 WAV E13"
 
         # Update the DataFrame for each derived product column
         for src_col, dst_col in col_mapping.items():
@@ -1640,113 +2157,128 @@ class CatalogueUpdater:
 
     def _link_ocn_to_grd(self, df: pl.DataFrame) -> pl.DataFrame:
         """
-        Link OCN products to GRD products using CDSE.
-        Uses the GRD footprint for spatial filtering when available.
+        Link OCN products to GRD products using CDSE in batch.
+        Marks as "NOT_FOUND" if CDSE cannot find an OCN.
         """
-        logger.info("Linking OCN to GRD products...")
-        
-        # Find GRD rows without OCN
-        grd_without_ocn = df.filter(
-            pl.col("SAFE GRD").is_not_null() & 
-            pl.col("SAFE OCN").is_null()
+        logger.info("Step 3: Linking OCN to GRD products...")
+
+        to_query = df.filter(
+            pl.col("SAFE GRD").is_not_null() & pl.col("SAFE OCN").is_null()
         )
-        
-        if grd_without_ocn.height == 0:
-            logger.info("All GRD products already have OCN linked.")
+
+        if to_query.height == 0:
+            logger.info("All GRD products already have OCN linked (or checked).")
             return df
-        
-        logger.info(f"Attempting to link OCN for {grd_without_ocn.height} GRD products...")
-        
-        updates = {}
-        for row in grd_without_ocn.to_dicts():
-            grd_name = row["SAFE GRD"]
-            grd_polygon = row.get("polygon GRD")
-            
-            try:
-                # Use CDSE to find OCN for this GRD
-                ocn_name = self._call_cdse_get_ocn_from_grd(grd_name, grd_polygon)
-                if ocn_name:
-                    updates[grd_name] = ocn_name
-                    logger.debug(f"CDSE found OCN for GRD {grd_name} -> {ocn_name}")
-                else:
-                    logger.warning(f"CDSE could not find OCN for GRD {grd_name}")
-            except Exception as e:
-                logger.error(f"Error linking OCN for GRD {grd_name}: {e}")
-        
-        # Apply updates
-        for grd_name, ocn_name in updates.items():
+
+        logger.info(
+            f"Attempting to link OCN for {to_query.height} GRD products via batch..."
+        )
+
+        grd_ids = to_query["SAFE GRD"].to_list()
+        mapping_grd_to_ocn = self._batch_cdse_match(grd_ids, "OCN_")
+
+        found_ocn_ids = set(mapping_grd_to_ocn.keys())
+
+        # 1. Appliquer les succès via un JOIN
+        if mapping_grd_to_ocn:
+            map_df = pl.DataFrame(
+                {
+                    "SAFE GRD": list(mapping_grd_to_ocn.keys()),
+                    "OCN_MATCH": list(mapping_grd_to_ocn.values()),
+                }
+            )
+            df = df.join(map_df, on="SAFE GRD", how="left")
             df = df.with_columns(
-                pl.when(pl.col("SAFE GRD") == grd_name)
-                .then(pl.lit(ocn_name))
+                pl.coalesce([pl.col("OCN_MATCH"), pl.col("SAFE OCN")]).alias("SAFE OCN")
+            ).drop("OCN_MATCH")
+
+        # 2. Marquer les échecs comme "NOT_FOUND"
+        failed_ids = [gid for gid in grd_ids if gid not in found_ocn_ids]
+        if failed_ids:
+            df = df.with_columns(
+                pl.when(pl.col("SAFE GRD").is_in(failed_ids))
+                .then(pl.lit("NOT_FOUND"))
                 .otherwise(pl.col("SAFE OCN"))
                 .alias("SAFE OCN")
             )
-        
-        logger.info(f"Linked OCN to {len(updates)} GRD products.")
+            logger.warning(
+                f"CDSE could not find OCN for {len(failed_ids)} GRD products."
+            )
+
+        logger.info(f"Linked OCN to {len(mapping_grd_to_ocn)} GRD products.")
         return df
 
     def _link_ocn_to_slc(self, df: pl.DataFrame) -> pl.DataFrame:
         """
         Fallback: Link OCN to SLC products when GRD link failed.
+        Uses batched CDSE query. Marks as "NOT_FOUND" if CDSE fails.
         """
-        logger.info("Fallback: Linking OCN to SLC products...")
-        
-        # Find SLC rows without OCN
-        slc_without_ocn = df.filter(
-            pl.col("SAFE SLC").is_not_null() & 
-            pl.col("SAFE OCN").is_null()
+        logger.info("Step 4: Fallback - Linking OCN to SLC products...")
+
+        to_query_base = df.filter(
+            pl.col("SAFE SLC").is_not_null()
+            & pl.col("SAFE GRD").is_null()
+            & pl.col("SAFE OCN").is_null()
         )
-        
-        if slc_without_ocn.height == 0:
+
+        if to_query_base.height == 0:
             logger.info("No SLC products need OCN fallback linking.")
             return df
-        
-        logger.info(f"Attempting to link OCN for {slc_without_ocn.height} SLC products...")
-        
-        # Get list of SLCs that already have OCN via GRD
-        # Use a different approach: collect the data first
-        linked_via_grd_names = set()
-        for row in df.filter(
-            pl.col("SAFE GRD").is_not_null() & 
-            pl.col("SAFE OCN").is_not_null()
-        ).to_dicts():
-            linked_via_grd_names.add(row.get("SAFE SLC"))
-        
-        updates = {}
-        for row in slc_without_ocn.to_dicts():
-            slc_name = row["SAFE SLC"]
-            
-            # Skip if this SLC already has a GRD with OCN
-            if slc_name in linked_via_grd_names:
-                continue
-            
-            slc_polygon = row.get("polygon SLC")
-            
-            try:
-                ocn_name = self._call_cdse_get_ocn_from_slc(slc_name, slc_polygon)
-                if ocn_name:
-                    updates[slc_name] = ocn_name
-                    logger.debug(f"CDSE found OCN for SLC {slc_name} -> {ocn_name}")
-                else:
-                    logger.warning(f"CDSE could not find OCN for SLC {slc_name}")
-            except Exception as e:
-                logger.error(f"Error linking OCN for SLC {slc_name}: {e}")
-        
-        # Apply updates
-        for slc_name, ocn_name in updates.items():
+
+        # Exclure les SLC dont le GRD a déjà trouvé un OCN à l'étape 3
+        linked_via_grd_names = set(
+            df.filter(
+                pl.col("SAFE GRD").is_not_null() & pl.col("SAFE OCN").is_not_null()
+            )["SAFE SLC"].to_list()
+        )
+
+        to_query = to_query_base.filter(~pl.col("SAFE SLC").is_in(linked_via_grd_names))
+
+        if to_query.height == 0:
+            logger.info("All SLC products already have OCN linked via GRD or checked.")
+            return df
+
+        logger.info(
+            f"Attempting to link OCN for {to_query.height} SLC products via batch..."
+        )
+
+        slc_ids = to_query["SAFE SLC"].to_list()
+        mapping_slc_to_ocn = self._batch_cdse_match(slc_ids, "OCN_")
+
+        found_ocn_ids = set(mapping_slc_to_ocn.keys())
+
+        # 1. Appliquer les succès via un JOIN
+        if mapping_slc_to_ocn:
+            map_df = pl.DataFrame(
+                {
+                    "SAFE SLC": list(mapping_slc_to_ocn.keys()),
+                    "OCN_MATCH": list(mapping_slc_to_ocn.values()),
+                }
+            )
+            df = df.join(map_df, on="SAFE SLC", how="left")
             df = df.with_columns(
-                pl.when(pl.col("SAFE SLC") == slc_name)
-                .then(pl.lit(ocn_name))
+                pl.coalesce([pl.col("OCN_MATCH"), pl.col("SAFE OCN")]).alias("SAFE OCN")
+            ).drop("OCN_MATCH")
+
+        # 2. Marquer les échecs comme "NOT_FOUND"
+        failed_ids = [sid for sid in slc_ids if sid not in found_ocn_ids]
+        if failed_ids:
+            df = df.with_columns(
+                pl.when(pl.col("SAFE SLC").is_in(failed_ids))
+                .then(pl.lit("NOT_FOUND"))
                 .otherwise(pl.col("SAFE OCN"))
                 .alias("SAFE OCN")
             )
-        
-        logger.info(f"Linked OCN to {len(updates)} SLC products.")
+            logger.warning(
+                f"CDSE could not find OCN for {len(failed_ids)} SLC products."
+            )
+
+        logger.info(f"Linked OCN to {len(mapping_slc_to_ocn)} SLC products.")
         return df
 
-    
-
-    def _call_cdse_get_ocn_from_grd(self, grd_name: str, polygon_wkt: Optional[str] = None) -> Optional[str]:
+    def _call_cdse_get_ocn_from_grd(
+        self, grd_name: str, polygon_wkt: str | None = None
+    ) -> str | None:
         """
         Query CDSE to find OCN for a given GRD.
         Uses polygon for spatial filtering if available.
@@ -1756,26 +2288,27 @@ class CatalogueUpdater:
         except ImportError:
             logger.warning("cdsodatacli not installed")
             return None
-        
+
         target_type = "OCN_"
         delta_dist = defaultdict(int)
-        
+
         try:
             result = find_product_for_safe(
                 source_id=grd_name,
                 target_type=target_type,
                 logger=logger,
-                delta_distribution=delta_dist
+                delta_distribution=delta_dist,
             )
             if result and "target_name" in result:
                 return result["target_name"]
         except Exception as e:
             logger.error(f"CDSE query failed for {grd_name}: {e}")
-        
+
         return None
 
-
-    def _call_cdse_get_ocn_from_slc(self, slc_name: str, polygon_wkt: Optional[str] = None) -> Optional[str]:
+    def _call_cdse_get_ocn_from_slc(
+        self, slc_name: str, polygon_wkt: str | None = None
+    ) -> str | None:
         """
         Query CDSE to find OCN for a given SLC.
         Uses polygon for spatial filtering if available.
@@ -1785,23 +2318,179 @@ class CatalogueUpdater:
         except ImportError:
             logger.warning("cdsodatacli not installed")
             return None
-        
+
         target_type = "OCN_"
         delta_dist = defaultdict(int)
-        
+
         try:
             result = find_product_for_safe(
                 source_id=slc_name,
                 target_type=target_type,
                 logger=logger,
-                delta_distribution=delta_dist
+                delta_distribution=delta_dist,
             )
             if result and "target_name" in result:
                 return result["target_name"]
         except Exception as e:
             logger.error(f"CDSE query failed for {slc_name}: {e}")
-        
+
         return None
+
+    def merge_catalogues(
+        self,
+        catalogue_paths: list[Path | str],
+        output_path: Path | str,
+        config_path: Path | str | None = None,
+    ) -> None:
+        """
+        Merge multiple catalogues into a single Parquet file.
+
+        - Each row is identified by its SAFE SLC/GRD/OCN (only one non-null).
+        - For duplicates, dataset lists are unioned, category is chosen by priority,
+        horodating takes the most recent, and presence columns keep first non-null.
+        """
+        from pathlib import Path
+
+        import polars as pl
+
+        catalogue_paths = [Path(p) for p in catalogue_paths]
+        output_path = Path(output_path)
+        if config_path:
+            config_path = Path(config_path)
+
+        if len(catalogue_paths) < 2:
+            raise ValueError("At least two catalogues are required for merging.")
+
+        # Validate schemas
+        schemas = []
+        for p in catalogue_paths:
+            if not p.exists():
+                raise FileNotFoundError(f"Catalogue not found: {p}")
+            df = pl.read_parquet(p, n_rows=0)
+            schemas.append(df.schema)
+
+        base_schema = schemas[0]
+        for i, s in enumerate(schemas[1:], start=1):
+            if s != base_schema:
+                raise ValueError(
+                    f"Schema mismatch in {catalogue_paths[i]}. "
+                    f"Expected {base_schema}, got {s}"
+                )
+
+        # Read all catalogues lazily
+        lazy_dfs = [pl.scan_parquet(str(p)) for p in catalogue_paths]
+        combined = pl.concat(lazy_dfs, how="vertical_relaxed")
+
+        # Create unique identifier
+        combined = combined.with_columns(
+            pl.when(pl.col("SAFE SLC").is_not_null())
+            .then(pl.col("SAFE SLC"))
+            .when(pl.col("SAFE GRD").is_not_null())
+            .then(pl.col("SAFE GRD"))
+            .otherwise(pl.col("SAFE OCN"))
+            .alias("_safe_id")
+        )
+
+        # Sort by horodating descending (so .first() gets most recent)
+        combined = combined.sort("horodating", descending=True)
+
+        # Define priority function
+        def _category_priority(category: str) -> int:
+            priorities = {"undefined": 0, "train": 1, "val": 2, "test": 3}
+            return priorities.get(category.lower() if category else "", 0)
+
+        def _best_category(categories: list) -> str:
+            if not categories:
+                return "undefined"
+            # Flatten nested lists
+            flat = []
+            for item in categories:
+                if isinstance(item, list):
+                    # If it's a list of lists, flatten
+                    if isinstance(item[0], list):
+                        for sub in item:
+                            flat.extend(sub)
+                    else:
+                        flat.extend(item)
+                else:
+                    flat.append(item)
+            # Remove None and empty strings
+            cats = [c for c in flat if isinstance(c, str) and c]
+            if not cats:
+                return "undefined"
+            return max(cats, key=_category_priority)
+
+        # Flatten category before grouping
+        # Use map_elements to safely flatten any list columns
+        def _flatten_category(x):
+            if isinstance(x, list):
+                # If it's a list of lists, flatten
+                while isinstance(x, list) and len(x) == 1 and isinstance(x[0], list):
+                    x = x[0]
+                if isinstance(x, list) and len(x) > 0:
+                    # If it's a list of strings, take first
+                    if isinstance(x[0], str):
+                        return x[0]
+                    # If it's still a list of lists, take first item recursively
+                    if isinstance(x[0], list):
+                        return x[0][0] if x[0] and isinstance(x[0][0], str) else None
+                return None
+            return x if isinstance(x, str) else None
+
+        combined = combined.with_columns(
+            pl.col("category")
+            .map_elements(_flatten_category, return_dtype=pl.Utf8)
+            .alias("category")
+        )
+
+        # Group and aggregate
+        aggregated = combined.group_by("_safe_id").agg(
+            [
+                pl.col("SAFE SLC").first().alias("SAFE SLC"),
+                pl.col("SAFE GRD").first().alias("SAFE GRD"),
+                pl.col("SAFE OCN").first().alias("SAFE OCN"),
+                # Use list.explode() instead of deprecated flatten()
+                pl.col("datasets").list.explode().unique().alias("datasets"),
+                # Collect categories for each group
+                pl.col("category").alias("_categories"),
+                pl.col("PATH SLC").first().alias("PATH SLC"),
+                pl.col("PATH GRD").first().alias("PATH GRD"),
+                pl.col("PATH OCN").first().alias("PATH OCN"),
+                pl.col("PATH L1B XSP A21").first().alias("PATH L1B XSP A21"),
+                pl.col("PATH L1C XSP B17").first().alias("PATH L1C XSP B17"),
+                pl.col("Hs WW3").first().alias("Hs WW3"),
+                pl.col("Tp WW3").first().alias("Tp WW3"),
+                pl.col("U10 ecmwf").first().alias("U10 ecmwf"),
+                pl.col("V10 ecmwf").first().alias("V10 ecmwf"),
+                pl.col("start date SAFE").min().alias("start date SAFE"),
+                pl.col("horodating").first().alias("horodating"),
+                pl.col("polygon SLC").first().alias("polygon SLC"),
+                pl.col("polygon GRD").first().alias("polygon GRD"),
+                pl.col("S3path SLC").first().alias("S3path SLC"),
+                pl.col("S3path GRD").first().alias("S3path GRD"),
+                pl.col("polarization").first().alias("polarization"),
+                pl.col("unit").first().alias("unit"),
+            ]
+        )
+
+        # Apply the best category function to the _categories column
+        aggregated = aggregated.with_columns(
+            pl.struct(["_categories"])
+            .map_elements(
+                lambda x: _best_category(x["_categories"]), return_dtype=pl.Utf8
+            )
+            .alias("category")
+        )
+
+        # Drop temporary columns
+        aggregated = aggregated.drop("_categories", "_safe_id")
+
+        # Ensure column order matches SCHEMA and collect
+        merged_df = aggregated.collect().select(list(SCHEMA.keys()))
+
+        # Write to output
+        merged_df.write_parquet(output_path, compression="snappy")
+        logger.info(f"Merged catalogue written to {output_path}")
 
     def update_meteorology(self, df: pl.DataFrame, force: bool = False) -> pl.DataFrame:
         return df

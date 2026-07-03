@@ -15,15 +15,15 @@ def sample_df():
     rows = [
         {
             "SAFE SLC": "S1A_IW_SLC__1SDV_20250101T123456_...",
-            "presence SLC": "/data/S1A_IW_SLC_...",
-            "dataset(s) d'appartenance": ["sarwave"],
+            "PATH SLC": "/data/S1A_IW_SLC_...",
+            "datasets": ["sarwave"],
             "start date SAFE": datetime.datetime(2025, 1, 1, 12, 34, 56),
             "horodating": datetime.datetime(2025, 1, 2, 0, 0, 0),
         },
         {
             "SAFE GRD": "S1B_IW_GRD_...",
-            "presence GRD": "/data/S1B_IW_GRD_...",
-            "dataset(s) d'appartenance": ["scat"],
+            "PATH GRD": "/data/S1B_IW_GRD_...",
+            "datasets": ["scat"],
             "start date SAFE": datetime.datetime(2025, 1, 2, 10, 0, 0),
             "horodating": datetime.datetime(2025, 1, 3, 0, 0, 0),
         },
@@ -58,7 +58,7 @@ def test_presence_completeness(sample_df):
     # Since only two rows with one presence each, but we have many columns
     # For simplicity just check that it returns dict with keys
     assert isinstance(completeness, dict)
-    assert "presence SLC" in completeness
+    assert "PATH SLC" in completeness
 
 
 def test_latest_acquisition(sample_df):
