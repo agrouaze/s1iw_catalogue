@@ -33,7 +33,8 @@ document.addEventListener('DOMContentLoaded', function() {
         window.fetchAggregatesAndRender(filters);
         window.updateHsTpHeatmap(filters);
         window.updateWindHeatmap(filters);
-        window.updateCategoryPieChart(filters);  // <-- ADD THIS
+        window.updateCategoryPieChart(filters);
+        window.updateMonthlyBarChart(filters);  // <-- ADD
         window.updateMap(filters);
     }
 

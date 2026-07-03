@@ -643,6 +643,140 @@ function updateWindHeatmap(filters) {
     });
 }
 
+// ---------- count per day ----------
+
+function updateDailyBarChart(filters) {
+    const plotDiv = document.getElementById('daily-bar-chart');
+    if (!plotDiv) return;
+
+    fetch('/api/browse/daily_counts', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(filters)
+    })
+    .then(response => {
+        if (!response.ok) {
+            return response.text().then(text => {
+                throw new Error(`HTTP ${response.status}: ${text.substring(0, 200)}`);
+            });
+        }
+        return response.json();
+    })
+    .then(data => {
+        if (data.error) {
+            plotDiv.innerHTML = `<p class="loading" style="color: #dc3545;">Error: ${data.error}</p>`;
+            return;
+        }
+
+        const dates = data.dates || [];
+        const series = data.series || {};
+        const datasetNames = data.datasets || [];
+
+        if (dates.length === 0 || datasetNames.length === 0) {
+            plotDiv.innerHTML = '<p class="loading">No daily data available</p>';
+            return;
+        }
+
+        // Build traces: one per dataset
+        // Use a light, distinct color palette
+        const colors = ['#a8c8ec', '#a8e0c4', '#f6cf9e', '#f2a8a8', '#c9b8ea', '#f6e39e', '#b8d4e3', '#d4b8d4'];
+        const traces = datasetNames.map((ds, idx) => ({
+            x: dates,
+            y: series[ds],
+            name: ds,
+            type: 'bar',
+            marker: { color: colors[idx % colors.length] },
+            text: series[ds].map(v => v.toString()),
+            textposition: 'inside',
+            insidetextanchor: 'middle',
+            hovertemplate: `%{x}<br>%{fullData.name}: %{y}<extra></extra>`,
+        }));
+
+        const layout = {
+            barmode: 'stack',
+            title: `Daily Product Counts (${dates.length} days)`,
+            xaxis: { title: 'Date', type: 'category' },
+            yaxis: { title: 'Number of products' },
+            height: 300,
+            margin: { l: 50, r: 20, t: 40, b: 50 },
+            legend: { orientation: 'h', y: 1.1, x: 0.5, xanchor: 'center' },
+            hovermode: 'x unified',
+        };
+
+        Plotly.newPlot('daily-bar-chart', traces, layout, { responsive: true });
+    })
+    .catch(error => {
+        console.error('Error fetching daily counts:', error);
+        plotDiv.innerHTML = `<p class="loading" style="color: #dc3545;">Error: ${error.message}</p>`;
+    });
+}
+
+
+
+function updateMonthlyBarChart(filters) {
+    const plotDiv = document.getElementById('daily-bar-chart');
+    if (!plotDiv) return;
+
+    fetch('/api/browse/monthly_counts', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(filters)
+    })
+    .then(response => {
+        if (!response.ok) {
+            return response.text().then(text => {
+                throw new Error(`HTTP ${response.status}: ${text.substring(0, 200)}`);
+            });
+        }
+        return response.json();
+    })
+    .then(data => {
+        if (data.error) {
+            plotDiv.innerHTML = `<p class="loading" style="color: #dc3545;">Error: ${data.error}</p>`;
+            return;
+        }
+
+        const months = data.months || [];
+        const series = data.series || {};
+        const datasetNames = data.datasets || [];
+
+        if (months.length === 0 || datasetNames.length === 0) {
+            plotDiv.innerHTML = '<p class="loading">No monthly data available</p>';
+            return;
+        }
+
+        const colors = ['#a8c8ec', '#a8e0c4', '#f6cf9e', '#f2a8a8', '#c9b8ea', '#f6e39e', '#b8d4e3', '#d4b8d4'];
+        const traces = datasetNames.map((ds, idx) => ({
+            x: months,
+            y: series[ds],
+            name: ds,
+            type: 'bar',
+            marker: { color: colors[idx % colors.length] },
+            text: series[ds].map(v => v.toString()),
+            textposition: 'inside',
+            insidetextanchor: 'middle',
+            hovertemplate: `%{x}<br>%{fullData.name}: %{y}<extra></extra>`,
+        }));
+
+        const layout = {
+            barmode: 'stack',
+            title: `Monthly Product Counts (${months.length} months)`,
+            xaxis: { title: 'Month', type: 'category' },
+            yaxis: { title: 'Number of products' },
+            height: 300,
+            margin: { l: 50, r: 20, t: 40, b: 50 },
+            legend: { orientation: 'h', y: 1.1, x: 0.5, xanchor: 'center' },
+            hovermode: 'x unified',
+        };
+
+        Plotly.newPlot('daily-bar-chart', traces, layout, { responsive: true });
+    })
+    .catch(error => {
+        console.error('Error fetching monthly counts:', error);
+        plotDiv.innerHTML = `<p class="loading" style="color: #dc3545;">Error: ${error.message}</p>`;
+    });
+}
+
 // ---------- Pagination helpers (state lives here, driven by filters.js) ----------
 
 function getCurrentPage() {

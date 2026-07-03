@@ -140,6 +140,24 @@
     gap: 8px;
 }
 
+/* ---------- COMPACT TABLE STYLES ---------- */
+.results-section .table {
+    font-size: 0.4rem;          /* smaller font */
+}
+
+.results-section .table th,
+.results-section .table td {
+    padding: 2px 6px;            /* reduced cell padding */
+    line-height: 0.8;            /* tighter line spacing */
+}
+
+/* Optional: reduce header font weight or make it slightly smaller */
+.results-section .table thead th {
+    font-size: 0.4rem;
+    padding: 3px 6px;
+}
+/* ----------------------------------------- */
+
 /* Pagination enhancement */
 #pagination {
     display: flex;

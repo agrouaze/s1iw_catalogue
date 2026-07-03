@@ -348,3 +348,92 @@ async def get_category_counts(request: FilterRequest) -> dict[str, Any]:
     counts = dict(zip(counts_df["category"], counts_df["len"]))
 
     return {"counts": counts, "total": df.height}
+
+@router.post("/daily_counts")
+async def get_daily_counts(request: FilterRequest) -> dict[str, Any]:
+    """Get daily product counts per dataset for stacked bar chart."""
+    if not catalogue_manager.is_loaded():
+        raise HTTPException(status_code=503, detail="Catalogue not loaded")
+
+    df = apply_filters(catalogue_manager.df, request)  # <-- FIX: pass request directly
+
+    if "start date SAFE" not in df.columns or "datasets" not in df.columns:
+        return {"error": "Missing required columns"}
+
+    # Convert to date only (ignore time)
+    df = df.with_columns(pl.col("start date SAFE").dt.date().alias("date"))
+
+    # Explode datasets and count per date+dataset
+    exploded = df.explode("datasets")
+    counts = exploded.group_by(["date", "datasets"]).agg(pl.len())
+
+    # Pivot to wide format
+    pivot = counts.pivot(
+        index="date",
+        columns="datasets",
+        values="len",
+        aggregate_function="sum"
+    )
+    pivot = pivot.fill_null(0)
+
+    dates = pivot["date"].to_list()
+    dataset_names = [c for c in pivot.columns if c != "date"]
+    series = {ds: pivot[ds].to_list() for ds in dataset_names}
+
+    # Sort dates chronologically
+    sorted_indices = sorted(range(len(dates)), key=lambda i: dates[i])
+    dates_sorted = [dates[i] for i in sorted_indices]
+    series_sorted = {ds: [series[ds][i] for i in sorted_indices] for ds in dataset_names}
+
+    return {
+        "dates": dates_sorted,
+        "series": series_sorted,
+        "datasets": dataset_names,
+    }
+
+@router.post("/monthly_counts")
+async def get_monthly_counts(request: FilterRequest) -> dict[str, Any]:
+    """Get monthly product counts per dataset for stacked bar chart."""
+    if not catalogue_manager.is_loaded():
+        raise HTTPException(status_code=503, detail="Catalogue not loaded")
+
+    df = apply_filters(catalogue_manager.df, request)
+
+    if "start date SAFE" not in df.columns or "datasets" not in df.columns:
+        return {"error": "Missing required columns"}
+
+    # Truncate to month (first day of each month)
+    df = df.with_columns(
+        pl.col("start date SAFE").dt.truncate("1mo").alias("month")
+    )
+
+    # Explode datasets and count per month+dataset
+    exploded = df.explode("datasets")
+    counts = exploded.group_by(["month", "datasets"]).agg(pl.len())
+
+    # Pivot to wide format
+    pivot = counts.pivot(
+        index="month",
+        columns="datasets",
+        values="len",
+        aggregate_function="sum"
+    )
+    pivot = pivot.fill_null(0)
+
+    months = pivot["month"].to_list()
+    dataset_names = [c for c in pivot.columns if c != "month"]
+    series = {ds: pivot[ds].to_list() for ds in dataset_names}
+
+    # Sort months chronologically
+    sorted_indices = sorted(range(len(months)), key=lambda i: months[i])
+    months_sorted = [months[i] for i in sorted_indices]
+    series_sorted = {ds: [series[ds][i] for i in sorted_indices] for ds in dataset_names}
+
+    # Format months as strings for display (e.g., "2025-01")
+    month_labels = [m.strftime("%Y-%m") for m in months_sorted]
+
+    return {
+        "months": month_labels,
+        "series": series_sorted,
+        "datasets": dataset_names,
+    }
