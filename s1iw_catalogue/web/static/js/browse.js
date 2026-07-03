@@ -249,6 +249,71 @@ function renderDatasetBarChart(rows, total) {
     Plotly.newPlot('dataset-bar-chart', [trace], layout);
 }
 
+function updateCategoryPieChart(filters) {
+    const plotDiv = document.getElementById('category-pie-plot');
+    if (!plotDiv) return;
+
+    fetch('/api/browse/category_counts', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(filters)
+    })
+    .then(response => {
+        if (!response.ok) {
+            return response.text().then(text => {
+                throw new Error(`HTTP ${response.status}: ${text.substring(0, 200)}`);
+            });
+        }
+        return response.json();
+    })
+    .then(data => {
+        const counts = data.counts || {};
+        const total = data.total || 0;
+
+        const labels = Object.keys(counts);
+        const values = Object.values(counts);
+
+        if (labels.length === 0) {
+            plotDiv.innerHTML = '<p class="loading">No category data available</p>';
+            return;
+        }
+
+        // Light, non-aggressive palette for categories
+        const categoryColors = {
+            'test': '#f2a8a8',     // soft red
+            'train': '#a8c8ec',    // soft blue
+            'val': '#a8e0c4',      // soft green
+            'undefined': '#d0d0d0' // soft grey
+        };
+        const defaultColor = '#c9b8ea'; // purple fallback
+
+        const colors = labels.map(cat => categoryColors[cat] || defaultColor);
+
+        const trace = {
+            type: 'pie',
+            labels: labels,
+            values: values,
+            marker: { colors: colors },
+            textinfo: 'label+percent',
+            hole: 0.35,
+            sort: false
+        };
+
+        const layout = {
+            title: `Category Distribution (${total} products)`,
+            height: 280,
+            margin: { l: 10, r: 10, t: 40, b: 10 },
+            showlegend: false
+        };
+
+        Plotly.newPlot('category-pie-plot', [trace], layout);
+    })
+    .catch(error => {
+        console.error('Error fetching category data:', error);
+        plotDiv.innerHTML = `<p class="loading" style="color: #dc3545;">Error: ${error.message}</p>`;
+    });
+}
+
 function renderPolarizationSatellitePieChart(rows, total) {
     const plotDiv = document.getElementById('pie-plot');
     if (!plotDiv) return;

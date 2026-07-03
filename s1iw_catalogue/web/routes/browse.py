@@ -331,3 +331,20 @@ async def get_wind_heatmap(request: HeatmapRequest) -> dict[str, Any]:
         },
         "count": len(speeds),
     }
+
+@router.post("/category_counts")
+async def get_category_counts(request: FilterRequest) -> dict[str, Any]:
+    """Get counts of products per category."""
+    if not catalogue_manager.is_loaded():
+        raise HTTPException(status_code=503, detail="Catalogue not loaded")
+
+    df = apply_filters(catalogue_manager.df, request)
+
+    if "category" not in df.columns:
+        return {"counts": {}, "total": df.height}
+
+    # Group by category
+    counts_df = df.group_by("category").agg(pl.len())
+    counts = dict(zip(counts_df["category"], counts_df["len"]))
+
+    return {"counts": counts, "total": df.height}
