@@ -491,11 +491,19 @@ function updateHsTpHeatmap(filters) {
                 x: data.data.hs,
                 y: data.data.tp,
                 mode: 'markers',
-                marker: { size: 5, color: 'blue', opacity: 0.6 },
-                type: 'scatter'
+                marker: {
+                    size: 6,
+                    color: data.data.density,
+                    colorscale: 'Viridis',
+                    showscale: true,
+                    colorbar: { title: 'Density' },
+                    opacity: 0.8
+                },
+                type: 'scatter',
+                hoverinfo: 'x+y'
             };
             const layout = {
-                title: `Hs vs Tp (${data.count} points)`,
+                title: `Hs vs Tp (${data.count} points, colored by density)`,
                 xaxis: { title: 'Hs (m)' },
                 yaxis: { title: 'Tp (s)' },
                 height: 250,
@@ -507,7 +515,7 @@ function updateHsTpHeatmap(filters) {
         }
     })
     .catch(error => {
-        console.error('Error fetching heatmap data:', error);
+        console.error('Error fetching Hs/Tp data:', error);
         plotDiv.innerHTML = `<p class="loading" style="color: #dc3545;">Error: ${error.message}</p>`;
     });
 }

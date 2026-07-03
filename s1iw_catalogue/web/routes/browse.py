@@ -225,30 +225,54 @@ async def get_map_data(request: MapRequest) -> dict[str, Any]:
 
 @router.post("/heatmap/hs_tp")
 async def get_hs_tp_heatmap(request: HeatmapRequest) -> dict[str, Any]:
-    """Get Hs/Tp data for heatmap visualization."""
+    """Get Hs/Tp data with density estimation."""
     if not catalogue_manager.is_loaded():
         raise HTTPException(status_code=503, detail="Catalogue not loaded")
 
     df = apply_filters(catalogue_manager.df, request.filter)
 
-    # Filter rows with both Hs and Tp
+    # Filtrer les valeurs finies (non NaN, non inf)
     hs_tp_df = df.filter(
-        pl.col("Hs WW3").is_not_null() & pl.col("Tp WW3").is_not_null()
+        pl.col("Hs WW3").is_finite() & pl.col("Tp WW3").is_finite()
     )
 
     if hs_tp_df.height == 0:
         return {
             "data": [],
-            "message": "No Hs/Tp data available for the selected filters",
+            "message": "No valid Hs/Tp data available for the selected filters",
         }
 
-    # Extract data
-    data = {
-        "hs": hs_tp_df["Hs WW3"].to_list(),
-        "tp": hs_tp_df["Tp WW3"].to_list(),
-    }
+    # Extraire les tableaux numpy
+    hs = hs_tp_df["Hs WW3"].to_numpy()
+    tp = hs_tp_df["Tp WW3"].to_numpy()
 
-    return {"data": data, "count": hs_tp_df.height}
+    # Sécurité supplémentaire : supprimer les NaN
+    mask = ~np.isnan(hs) & ~np.isnan(tp)
+    hs = hs[mask]
+    tp = tp[mask]
+
+    if len(hs) < 2:
+        return {
+            "data": {"hs": hs.tolist(), "tp": tp.tolist(), "density": [1.0] * len(hs)},
+            "count": len(hs),
+        }
+
+    # Calcul de la densité KDE
+    data = np.vstack([hs, tp])
+    kde = gaussian_kde(data)
+    density = kde(data)
+
+    # Normalisation
+    density_norm = density / density.max() if density.max() > 0 else density
+
+    return {
+        "data": {
+            "hs": hs.tolist(),
+            "tp": tp.tolist(),
+            "density": density_norm.tolist(),
+        },
+        "count": len(hs),
+    }
 
 
 @router.post("/heatmap/wind")
@@ -259,48 +283,51 @@ async def get_wind_heatmap(request: HeatmapRequest) -> dict[str, Any]:
 
     df = apply_filters(catalogue_manager.df, request.filter)
 
-    # Filter rows with both U10 and V10
+    # Filtrer les valeurs finies pour U10 et V10
     wind_df = df.filter(
-        pl.col("U10 ecmwf").is_not_null() & pl.col("V10 ecmwf").is_not_null()
+        pl.col("U10 ecmwf").is_finite() & pl.col("V10 ecmwf").is_finite()
     )
 
     if wind_df.height == 0:
         return {
             "data": [],
-            "message": "No wind data available for the selected filters",
+            "message": "No valid wind data available for the selected filters",
         }
 
-    # Calculate wind speed and direction
+    # Calcul de la vitesse et direction (identique)
     wind_df = wind_df.with_columns([
         ((pl.col("U10 ecmwf")**2 + pl.col("V10 ecmwf")**2).sqrt()).alias("wind_speed"),
-        # Meteorological wind direction: 0° = wind from North, clockwise
         ((180 + (180 / np.pi) * pl.arctan2(pl.col("U10 ecmwf"), pl.col("V10 ecmwf"))) % 360)
         .alias("wind_direction")
     ])
 
-    # Extract numpy arrays
+    # Extraire et nettoyer
     directions = wind_df["wind_direction"].to_numpy()
     speeds = wind_df["wind_speed"].to_numpy()
+    mask = ~np.isnan(directions) & ~np.isnan(speeds)
+    directions = directions[mask]
+    speeds = speeds[mask]
 
-    # Compute density using Gaussian KDE
-    if len(directions) > 1:
-        # Stack data (2 x N)
-        data = np.vstack([directions, speeds])
-        # KDE requires a 2D array; we need to handle circular nature of direction
-        # We'll use the raw direction (0-360) but it's not circular for KDE; okay for typical scatter.
-        kde = gaussian_kde(data)
-        density = kde(data)  # density at each point
-    else:
-        density = [1.0]  # single point
+    if len(speeds) < 2:
+        return {
+            "data": {
+                "speed": speeds.tolist(),
+                "direction": directions.tolist(),
+                "density": [1.0] * len(speeds),
+            },
+            "count": len(speeds),
+        }
 
-    # Normalize density (optional, for better color scaling)
+    data = np.vstack([directions, speeds])
+    kde = gaussian_kde(data)
+    density = kde(data)
     density_norm = density / density.max() if density.max() > 0 else density
 
     return {
         "data": {
             "speed": speeds.tolist(),
             "direction": directions.tolist(),
-            "density": density_norm.tolist(),  # normalized 0-1
+            "density": density_norm.tolist(),
         },
-        "count": wind_df.height,
+        "count": len(speeds),
     }
