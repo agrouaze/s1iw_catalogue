@@ -531,7 +531,8 @@ function updateMap(filters) {
             titleElement.textContent = `🌍 Products (${features.length} shown, colored by satellite)`;
         }
 
-        Plotly.react('map-plot', [trace], layout, { responsive: true });
+        // 🔥 Use newPlot instead of react to force a full redraw
+        Plotly.newPlot('map-plot', [trace], layout, { responsive: true });
     })
     .catch(error => {
         console.error('Error fetching map data:', error);

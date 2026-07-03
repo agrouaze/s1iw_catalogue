@@ -34,8 +34,17 @@ document.addEventListener('DOMContentLoaded', function() {
         window.updateHsTpHeatmap(filters);
         window.updateWindHeatmap(filters);
         window.updateCategoryPieChart(filters);
-        window.updateMonthlyBarChart(filters);  // <-- ADD
+        window.updateMonthlyBarChart(filters);
         window.updateMap(filters);
+
+        // Afficher un toast avec le nombre de résultats
+        // On utilise la fonction updateResultsTable qui a déjà récupéré les données.
+        // On peut récupérer le total depuis le DOM, ou depuis la dernière requête.
+        // Pour simplifier, on peut afficher un message générique.
+        // Mais on peut aussi récupérer le total depuis la dernière requête via une variable globale.
+        // Je propose d'ajouter un champ "total" dans le JSON retourné par /filter, et de le stocker.
+        // Pour l'instant, on affiche un message simple.
+        window.showToast('✅ Filtres appliqués – données mises à jour');
     }
 
     function applyFilters() {
@@ -84,3 +93,31 @@ document.addEventListener('DOMContentLoaded', function() {
         renderAll();
     });
 });
+
+
+function showToast(message) {
+    const toast = document.getElementById('toast');
+    const msgEl = document.getElementById('toast-message');
+    if (!toast || !msgEl) return;
+
+    msgEl.textContent = message;
+    toast.classList.add('show');
+
+    // Auto-hide after 3.5 seconds
+    clearTimeout(window.toastTimeout);
+    window.toastTimeout = setTimeout(() => {
+        hideToast();
+    }, 3500);
+}
+
+function hideToast() {
+    const toast = document.getElementById('toast');
+    if (toast) {
+        toast.classList.remove('show');
+        clearTimeout(window.toastTimeout);
+    }
+}
+
+// Expose to global scope
+window.showToast = showToast;
+window.hideToast = hideToast;
