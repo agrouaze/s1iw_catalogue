@@ -11,7 +11,8 @@ import shapely
 from fastapi import APIRouter, HTTPException
 from shapely import wkt
 from shapely.geometry import Point, mapping, shape
-
+import numpy as np
+from scipy.stats import gaussian_kde
 from s1iw_catalogue.web.models import FilterRequest, HeatmapRequest, MapRequest
 from s1iw_catalogue.web.utils.data_loader import catalogue_manager
 
@@ -252,7 +253,7 @@ async def get_hs_tp_heatmap(request: HeatmapRequest) -> dict[str, Any]:
 
 @router.post("/heatmap/wind")
 async def get_wind_heatmap(request: HeatmapRequest) -> dict[str, Any]:
-    """Get wind direction/speed data for heatmap visualization."""
+    """Get wind direction/speed data with density estimation."""
     if not catalogue_manager.is_loaded():
         raise HTTPException(status_code=503, detail="Catalogue not loaded")
 
@@ -269,10 +270,37 @@ async def get_wind_heatmap(request: HeatmapRequest) -> dict[str, Any]:
             "message": "No wind data available for the selected filters",
         }
 
-    # Extract data
-    data = {
-        "u10": wind_df["U10 ecmwf"].to_list(),
-        "V10": wind_df["V10 ecmwf"].to_list(),
-    }
+    # Calculate wind speed and direction
+    wind_df = wind_df.with_columns([
+        ((pl.col("U10 ecmwf")**2 + pl.col("V10 ecmwf")**2).sqrt()).alias("wind_speed"),
+        # Meteorological wind direction: 0° = wind from North, clockwise
+        ((180 + (180 / np.pi) * pl.arctan2(pl.col("U10 ecmwf"), pl.col("V10 ecmwf"))) % 360)
+        .alias("wind_direction")
+    ])
 
-    return {"data": data, "count": wind_df.height}
+    # Extract numpy arrays
+    directions = wind_df["wind_direction"].to_numpy()
+    speeds = wind_df["wind_speed"].to_numpy()
+
+    # Compute density using Gaussian KDE
+    if len(directions) > 1:
+        # Stack data (2 x N)
+        data = np.vstack([directions, speeds])
+        # KDE requires a 2D array; we need to handle circular nature of direction
+        # We'll use the raw direction (0-360) but it's not circular for KDE; okay for typical scatter.
+        kde = gaussian_kde(data)
+        density = kde(data)  # density at each point
+    else:
+        density = [1.0]  # single point
+
+    # Normalize density (optional, for better color scaling)
+    density_norm = density / density.max() if density.max() > 0 else density
+
+    return {
+        "data": {
+            "speed": speeds.tolist(),
+            "direction": directions.tolist(),
+            "density": density_norm.tolist(),  # normalized 0-1
+        },
+        "count": wind_df.height,
+    }

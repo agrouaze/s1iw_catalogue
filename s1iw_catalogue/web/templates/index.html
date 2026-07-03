@@ -108,22 +108,22 @@
                     const displayName = getDatasetDisplayName(dataset);
                     html += `<tr>
                         <td><strong>${displayName}</strong></td>
-                        ${renderCell(metrics['presence SLC'])}
-                        ${renderCell(metrics['presence GRD'])}
-                        ${renderCell(metrics['presence OCN'])}
-                        ${renderCell(metrics['presence L1B XSP A21'])}
-                        ${renderCell(metrics['presence L1C XSP B17'])}
+                        ${renderCell(metrics['PATH SLC'])}
+                        ${renderCell(metrics['PATH GRD'])}
+                        ${renderCell(metrics['PATH OCN'])}
+                        ${renderCell(metrics['PATH L1B XSP A21'])}
+                        ${renderCell(metrics['PATH L1C XSP B17'])}
                         ${renderOverallCell(metrics['overall'])}
                     </tr>`;
                 }
                 const overall = data.overall;
                 html += `<tr class="overall-row">
                     <td><strong>Overall</strong></td>
-                    ${renderCell(overall['presence SLC'])}
-                    ${renderCell(overall['presence GRD'])}
-                    ${renderCell(overall['presence OCN'])}
-                    ${renderCell(overall['presence L1B XSP A21'])}
-                    ${renderCell(overall['presence L1C XSP B17'])}
+                    ${renderCell(overall['PATH SLC'])}
+                    ${renderCell(overall['PATH GRD'])}
+                    ${renderCell(overall['PATH OCN'])}
+                    ${renderCell(overall['PATH L1B XSP A21'])}
+                    ${renderCell(overall['PATH L1C XSP B17'])}
                     ${renderOverallCell(overall['overall'])}
                 </tr>`;
                 html += '</tbody></table>';

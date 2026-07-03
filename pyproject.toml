@@ -33,6 +33,7 @@ requires-python = ">=3.11"
 dependencies = [
   "s1ifr",          # <-- Fixed: removed " @ s1ifr"
   "polars",
+  "scipy",
   "click",
   "pyyaml",
   "cdsodatacli",

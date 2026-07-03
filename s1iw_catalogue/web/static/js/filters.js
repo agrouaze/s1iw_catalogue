@@ -32,6 +32,7 @@ document.addEventListener('DOMContentLoaded', function() {
         window.updateResultsTable(filters);
         window.fetchAggregatesAndRender(filters);
         window.updateHsTpHeatmap(filters);
+        window.updateWindHeatmap(filters);  // <-- AJOUTER
         window.updateMap(filters);
     }
 

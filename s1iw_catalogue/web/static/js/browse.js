@@ -512,6 +512,64 @@ function updateHsTpHeatmap(filters) {
     });
 }
 
+
+function updateWindHeatmap(filters) {
+    const plotDiv = document.getElementById('wind-plot');
+    if (!plotDiv) return;
+
+    fetch('/api/browse/heatmap/wind', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+            filter: filters,
+            variable: "wind"
+        })
+    })
+    .then(response => {
+        if (!response.ok) {
+            return response.text().then(text => {
+                throw new Error(`HTTP ${response.status}: ${text.substring(0, 200)}`);
+            });
+        }
+        return response.json();
+    })
+    .then(data => {
+        const plotDiv = document.getElementById('wind-plot');
+        if (data.data && data.data.speed && data.data.speed.length > 0) {
+            const trace = {
+                x: data.data.direction,
+                y: data.data.speed,
+                mode: 'markers',
+                marker: {
+                    size: 6,
+                    color: data.data.density,   // <-- density as color
+                    colorscale: 'Viridis',
+                    showscale: true,
+                    colorbar: { title: 'Density' },
+                    opacity: 0.8
+                },
+                type: 'scatter',
+                hoverinfo: 'x+y'
+            };
+            const layout = {
+                title: `Wind Speed vs Direction (${data.count} points, colored by density)`,
+                xaxis: { title: 'Wind Direction (°)', range: [0, 360] },
+                yaxis: { title: 'Wind Speed (m/s)' },
+                height: 250,
+                margin: { l: 50, r: 20, t: 40, b: 50 }
+            };
+            Plotly.newPlot('wind-plot', [trace], layout);
+        } else {
+            plotDiv.innerHTML = '<p class="loading">No wind data available</p>';
+        }
+    })
+    .catch(error => {
+        console.error('Error fetching wind data:', error);
+        const plotDiv = document.getElementById('wind-plot');
+        plotDiv.innerHTML = `<p class="loading" style="color: #dc3545;">Error: ${error.message}</p>`;
+    });
+}
+
 // ---------- Pagination helpers (state lives here, driven by filters.js) ----------
 
 function getCurrentPage() {
