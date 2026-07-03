@@ -8,6 +8,15 @@ let datasetMetadata = {};
 let currentPage = 0;
 const pageSize = 100;
 
+// Couleurs par satellite (cohérentes avec la carte)
+const satelliteColors = {
+            'S1A': '#e63946',   // rouge vif
+            'S1B': '#457b9d',   // bleu moyen
+            'S1C': '#2a9d8f',   // vert-bleu
+            'S1D': '#e9c46a'    // jaune/or
+        };
+const DEFAULT_SATELLITE_COLOR = '#9f7aea'; // violet
+
 // ---------- Dataset metadata & description box ----------
 
 function loadDatasetMetadata() {
@@ -349,9 +358,11 @@ function renderPolarizationSatellitePieChart(rows, total) {
         plotDiv.innerHTML = '<p class="loading">No polarization/satellite data available</p>';
         return;
     }
-
+    const satLabels = Object.keys(satelliteCounts);
+    const satValues = Object.values(satelliteCounts);
+    const satColors = satLabels.map(sat => satelliteColors[sat] || DEFAULT_SATELLITE_COLOR);
     // Light, non-aggressive palette
-    const softColors = ['#a8c8ec', '#a8e0c4', '#f6cf9e', '#f2a8a8', '#c9b8ea', '#f6e39e'];
+    // const softColors = ['#a8c8ec', '#a8e0c4', '#f6cf9e', '#f2a8a8', '#c9b8ea', '#f6e39e'];
 
     const polTrace = {
         type: 'pie',
@@ -359,7 +370,7 @@ function renderPolarizationSatellitePieChart(rows, total) {
         values: Object.values(polarizationCounts),
         domain: { x: [0, 0.48] },
         name: 'Polarization',
-        marker: { colors: softColors },
+        marker: { colors: satColors },
         textinfo: 'label+percent',
         hole: 0.35,
         sort: false
@@ -367,11 +378,11 @@ function renderPolarizationSatellitePieChart(rows, total) {
 
     const satTrace = {
         type: 'pie',
-        labels: Object.keys(satelliteCounts),
-        values: Object.values(satelliteCounts),
+        labels: satLabels,
+        values: satValues,
         domain: { x: [0.52, 1] },
         name: 'Satellite',
-        marker: { colors: softColors },
+        marker: { colors: satColors },
         textinfo: 'label+percent',
         hole: 0.35,
         sort: false
@@ -391,8 +402,8 @@ function renderPolarizationSatellitePieChart(rows, total) {
 }
 
 // ---------- Map ----------
-
 function updateMap(filters) {
+
     const plotDiv = document.getElementById('map-plot');
     if (!plotDiv) return;
     plotDiv.innerHTML = '<p class="loading">Loading map data...</p>';
@@ -405,85 +416,90 @@ function updateMap(filters) {
             max_polygons: 100
         })
     })
-    .then(response => {
-        if (!response.ok) {
-            return response.text().then(text => {
-                throw new Error(`HTTP ${response.status}: ${text.substring(0, 200)}`);
-            });
-        }
-        return response.json();
-    })
+    .then(response => response.json())
     .then(data => {
         const features = data.features || [];
-
         if (features.length === 0) {
-            plotDiv.innerHTML = '<p class="loading">No footprints available for the selected filters</p>';
+            plotDiv.innerHTML = '<p class="loading">No footprints available</p>';
             return;
         }
 
-        const satelliteColors = {
-            'S1A': '#1a365d',
-            'S1B': '#2c5282',
-            'S1C': '#48bb78',
-            'S1D': '#f6ad55'
-        };
-        const defaultColor = '#9f7aea';
+        // Couleurs plus vives pour chaque satellite
+        // const satelliteColors = {
+        //     'S1A': '#e63946',   // rouge vif
+        //     'S1B': '#457b9d',   // bleu moyen
+        //     'S1C': '#2a9d8f',   // vert-bleu
+        //     'S1D': '#e9c46a'    // jaune/or
+        // };
+        // const defaultColor = '#9f7aea';
 
-        const lons = [];
-        const lats = [];
-        const hoverTexts = [];
-        const colors = [];
+        // Ordre des satellites pour la légende
+        const satelliteOrder = ['S1A', 'S1B', 'S1C', 'S1D'];
 
-        features.forEach(feature => {
+        let traces = [];
+        let usedSatellites = new Set();
+
+        features.forEach((feature, idx) => {
             const geom = feature.geometry;
             const props = feature.properties;
+            const sat = props.satellite || props.unit || 'unknown';
+            usedSatellites.add(sat);
+            const color = satelliteColors[sat] || DEFAULT_SATELLITE_COLOR;
 
-            let lon, lat;
-            if (geom.type === 'Point') {
-                lon = geom.coordinates[0];
-                lat = geom.coordinates[1];
-            } else if (geom.type === 'Polygon' || geom.type === 'MultiPolygon') {
-                try {
-                    const coords = geom.type === 'Polygon' ? geom.coordinates[0] : geom.coordinates[0][0];
-                    let sumLon = 0, sumLat = 0;
-                    coords.forEach(coord => {
-                        sumLon += coord[0];
-                        sumLat += coord[1];
-                    });
-                    lon = sumLon / coords.length;
-                    lat = sumLat / coords.length;
-                } catch (e) {
-                    return;
-                }
+            let coords = [];
+            if (geom.type === 'Polygon') {
+                coords = geom.coordinates[0];
+            } else if (geom.type === 'MultiPolygon') {
+                coords = geom.coordinates[0][0];
             } else {
                 return;
             }
 
+            if (!coords || coords.length === 0) return;
+
+            const lons = coords.map(c => c[0]);
+            const lats = coords.map(c => c[1]);
+
             const datasets = (props.dataset || []).join(', ');
-            const hoverText =
-                `<b>SAFE SLC:</b> ${props.safe_slc || 'N/A'}<br>` +
-                `<b>SAFE GRD:</b> ${props.safe_grd || 'N/A'}<br>` +
-                `<b>Satellite:</b> ${props.satellite || 'N/A'}<br>` +
-                `<b>Start Date:</b> ${props.start_date || 'N/A'}<br>` +
-                `<b>Datasets:</b> ${datasets || 'N/A'}`;
-            hoverTexts.push(hoverText);
+            const hoverText = `
+                <b>SAFE SLC:</b> ${props.safe_slc || 'N/A'}<br>
+                <b>SAFE GRD:</b> ${props.safe_grd || 'N/A'}<br>
+                <b>Satellite:</b> ${sat}<br>
+                <b>Start Date:</b> ${props.start_date || 'N/A'}<br>
+                <b>Datasets:</b> ${datasets || 'N/A'}`;
 
-            const satellite = props.satellite || 'unknown';
-            colors.push(satelliteColors[satellite] || defaultColor);
-
-            lons.push(lon);
-            lats.push(lat);
+            const trace = {
+                type: 'scattermapbox',
+                lon: lons,
+                lat: lats,
+                mode: 'lines',
+                fill: 'none',
+                line: {
+                    width: 1.5,
+                    color: color
+                },
+                text: [hoverText],
+                hoverinfo: 'text',
+                hoverlabel: { bgcolor: 'white', font: { size: 12 } },
+                name: sat  // pour la légende (regroupé automatiquement si même nom)
+            };
+            traces.push(trace);
         });
 
-        let centerLon = 0;
-        let centerLat = 20;
-        let zoom = 2;
+        if (traces.length === 0) {
+            plotDiv.innerHTML = '<p class="loading">No valid polygons found</p>';
+            return;
+        }
 
-        if (lons.length > 0) {
-            centerLon = lons.reduce((a, b) => a + b, 0) / lons.length;
-            centerLat = lats.reduce((a, b) => a + b, 0) / lats.length;
-            const lonSpread = Math.max(...lons) - Math.min(...lons);
-            const latSpread = Math.max(...lats) - Math.min(...lats);
+        // Centrage (inchangé)
+        let allLons = [], allLats = [];
+        traces.forEach(t => { allLons.push(...t.lon); allLats.push(...t.lat); });
+        let centerLon = 0, centerLat = 20, zoom = 2;
+        if (allLons.length > 0) {
+            centerLon = allLons.reduce((a,b) => a+b, 0) / allLons.length;
+            centerLat = allLats.reduce((a,b) => a+b, 0) / allLats.length;
+            const lonSpread = Math.max(...allLons) - Math.min(...allLons);
+            const latSpread = Math.max(...allLats) - Math.min(...allLats);
             const maxSpread = Math.max(lonSpread, latSpread);
             if (maxSpread < 10) zoom = 6;
             else if (maxSpread < 30) zoom = 4;
@@ -491,55 +507,54 @@ function updateMap(filters) {
             else zoom = 2;
         }
 
-        const trace = {
-            type: 'scattermapbox',
-            lon: lons,
-            lat: lats,
-            mode: 'markers',
-            marker: {
-                size: 12,
-                color: colors,
-                opacity: 0.8,
-                symbol: 'circle'
-            },
-            text: hoverTexts,
-            hoverinfo: 'text',
-            hoverlabel: {
-                bgcolor: 'white',
-                font: { size: 12 }
-            },
-            name: 'Products'
-        };
+        // Construction de la légende personnalisée (carrés de couleur)
+        let annotations = [];
+        let legendX = 0.02;
+        let legendY = 0.98;
+        let stepY = 0.05;
+        satelliteOrder.forEach(sat => {
+            if (!usedSatellites.has(sat)) return;
+            const color = satelliteColors[sat] || defaultColor;
+            annotations.push({
+                x: legendX,
+                y: legendY,
+                xref: 'paper',
+                yref: 'paper',
+                text: `■ ${sat}`,
+                showarrow: false,
+                font: { size: 12, color: color },
+                align: 'left',
+                bgcolor: 'rgba(255,255,255,0.8)',
+                borderpad: 2
+            });
+            legendY -= stepY;
+        });
 
         const layout = {
             mapbox: {
                 style: 'open-street-map',
-                center: {
-                    lon: centerLon,
-                    lat: centerLat
-                },
-                zoom: zoom,
+                center: { lon: centerLon, lat: centerLat },
+                zoom: zoom
             },
             margin: { l: 0, r: 0, t: 0, b: 0 },
             height: 280,
             hovermode: 'closest',
-            showlegend: false
+            showlegend: false,  // on utilise des annotations à la place
+            annotations: annotations
         };
 
-        const titleElement = document.querySelector('#map-plot')?.parentElement?.querySelector('h3');
-        if (titleElement) {
-            titleElement.textContent = `🌍 Products (${features.length} shown, colored by satellite)`;
+        const titleEl = document.querySelector('#map-plot')?.parentElement?.querySelector('h3');
+        if (titleEl) {
+            titleEl.textContent = `🌍 Products (${traces.length} polygons, colored by satellite)`;
         }
 
-        // 🔥 Use newPlot instead of react to force a full redraw
-        Plotly.newPlot('map-plot', [trace], layout, { responsive: true });
+        Plotly.newPlot('map-plot', traces, layout, { responsive: true });
     })
     .catch(error => {
-        console.error('Error fetching map data:', error);
+        console.error('Map error:', error);
         plotDiv.innerHTML = `<p class="loading" style="color: #dc3545;">Error: ${error.message}</p>`;
     });
 }
-
 // ---------- Hs/Tp heatmap ----------
 
 function updateHsTpHeatmap(filters) {

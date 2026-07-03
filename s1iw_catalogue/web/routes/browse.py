@@ -151,42 +151,34 @@ async def filter_catalogue(request: FilterRequest) -> dict[str, Any]:
 async def get_map_data(request: MapRequest) -> dict[str, Any]:
     """
     Get product data with geometry for map visualization.
-    Returns polygons or centroids (points) if too many features.
+    Returns polygons (simplified if many features).
     """
     if not catalogue_manager.is_loaded():
         raise HTTPException(status_code=503, detail="Catalogue not loaded")
 
     df = apply_filters(catalogue_manager.df, request.filter)
 
-    # Limit polygons
-    max_polygons = request.max_polygons or 100
+    max_polygons = request.max_polygons or 500
     df = df.slice(0, max_polygons)
 
     features = []
-    point_count = 0
     polygon_count = 0
 
     for row in df.to_dicts():
-        # Determine which geometry column to use (prefer polygon SLC then polygon GRD)
         polygon_wkt = row.get("polygon SLC") or row.get("polygon GRD")
         if not polygon_wkt:
             continue
 
         try:
             geom = wkt.loads(polygon_wkt)
-
-            # Simplify geometry for web display
             if geom.geom_type == "MultiPolygon":
                 geom = shapely.ops.unary_union(geom)
 
-            # If too many polygons, use centroids instead
-            if df.height > 50:
-                geom = geom.centroid
-                point_count += 1
-            else:
-                # Simplify polygon with tolerance
-                geom = geom.simplify(0.01)
-                polygon_count += 1
+            # Simplify polygon for web display
+            # Plus de simplification si beaucoup de polygones
+            tolerance = 0.02 if df.height > 100 else 0.01
+            geom = geom.simplify(tolerance)
+            polygon_count += 1
 
             feature = {
                 "type": "Feature",
@@ -198,14 +190,8 @@ async def get_map_data(request: MapRequest) -> dict[str, Any]:
                     "dataset": row.get("datasets"),
                     "polarization": row.get("polarization"),
                     "satellite": row.get("unit"),
-                    "start_date": (
-                        str(row.get("start date SAFE"))
-                        if row.get("start date SAFE")
-                        else None
-                    ),
-                    "horodating": (
-                        str(row.get("horodating")) if row.get("horodating") else None
-                    ),
+                    "start_date": str(row.get("start date SAFE")) if row.get("start date SAFE") else None,
+                    "horodating": str(row.get("horodating")) if row.get("horodating") else None,
                 },
             }
             features.append(feature)
@@ -217,9 +203,8 @@ async def get_map_data(request: MapRequest) -> dict[str, Any]:
         "type": "FeatureCollection",
         "features": features,
         "total": df.height,
-        "point_count": point_count,
         "polygon_count": polygon_count,
-        "is_point_mode": df.height > 50,
+        "is_point_mode": False,  # toujours des polygones
     }
 
 

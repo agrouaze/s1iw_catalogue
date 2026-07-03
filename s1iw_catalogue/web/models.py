@@ -32,7 +32,7 @@ class MapRequest(BaseModel):
 
     filter: FilterRequest = Field(..., description="Filter criteria")
     max_polygons: int = Field(
-        100, ge=1, le=500, description="Max number of polygons to return"
+        150, ge=1, le=2000, description="Max number of polygons to return"
     )
 
 
