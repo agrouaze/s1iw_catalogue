@@ -46,10 +46,11 @@ class S1IWCatalogue:
             self._config_path = None
 
         # Load config
+        # Load config
         if isinstance(config, (str, Path)):
             self._config = load_config(config_path=config)
         else:
-            self._config = load_config() if config is None else config
+            self._config = load_config(config_path=self._config_path) if config is None else config
 
         self._updater = CatalogueUpdater(config=self._config, config_path=self._config_path)  # type: ignore[arg-type]
 

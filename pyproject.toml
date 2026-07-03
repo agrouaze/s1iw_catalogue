@@ -2,7 +2,6 @@
 name = "s1ifr"
 url = "https://__token__${S1IFR_PYPI_TOKEN}@gitlab.ifremer.fr/api/v4/projects/4991/packages/pypi/simple"
 explicit = true
-# --------------------------------------
 
 [build-system]
 requires = ["hatchling", "hatch-vcs"]
@@ -32,13 +31,12 @@ classifiers = [
 requires-python = ">=3.11"
 
 dependencies = [
-  "s1ifr @ s1ifr",  # <--- CHANGED: Force s1ifr to use the explicit index
+  "s1ifr",          # <-- Fixed: removed " @ s1ifr"
   "polars",
   "click",
   "pyyaml",
   "cdsodatacli",
 ]
-
 
 [project.optional-dependencies]
 dev = [
@@ -60,22 +58,21 @@ dev = [
   "pytest-cov",
 ]
 web = [
-    "fastapi",
-    "uvicorn[standard]",
-    "plotly",
-    "jinja2",
-    "python-multipart",
-    "shapely",
-    "geopandas",
+  "fastapi",
+  "uvicorn[standard]",
+  "plotly",
+  "jinja2",
+  "python-multipart",
+  "shapely",
+  "geopandas",
 ]
 
 [project.scripts]
 catalog-iw = "s1iw_catalogue.cli:main"
 
-[tool.pip]
-extra-index-url = [
-  "https://gitlab.ifremer.fr/api/v4/projects/4991/packages/pypi/simple",
-]
+# Allow direct references if needed in the future
+[tool.hatch.metadata]
+allow-direct-references = true
 
 [tool.hatch.version]
 source = "vcs"

@@ -5,6 +5,82 @@
 {% block extra_head %}
 <link rel="stylesheet" href="/static/css/browse.css">
 <script src="https://cdn.jsdelivr.net/npm/@turf/turf@6/turf.min.js"></script>
+<style>
+    #dataset-filter {
+        min-height: 220px;
+        width: 100%;
+    }
+    .filter-row-top {
+        display: grid;
+        grid-template-columns: 1.2fr 1fr;
+        gap: 20px;
+        align-items: stretch;
+    }
+    .filter-left-column {
+        display: flex;
+        flex-direction: column;
+        gap: 12px;
+    }
+    .filter-subrow {
+        display: flex;
+        gap: 12px;
+    }
+    .filter-subrow .filter-group {
+        flex: 1;
+    }
+    .dataset-column {
+        display: flex;
+        flex-direction: column;
+    }
+    #dataset-description-box {
+        flex: 1;
+        padding: 10px 12px;
+        border: 1px solid #d0d7de;
+        border-radius: 6px;
+        background: #f6f8fa;
+        font-size: 0.9em;
+        overflow-y: auto;
+        min-height: 150px;
+    }
+    #dataset-description-box .dataset-description-placeholder {
+        color: #8b949e;
+        font-style: italic;
+        margin: 0;
+    }
+    #dataset-description-box .dataset-desc-item {
+        margin-bottom: 8px;
+        padding-bottom: 8px;
+        border-bottom: 1px solid #e1e4e8;
+    }
+    #dataset-description-box .dataset-desc-item:last-child {
+        margin-bottom: 0;
+        padding-bottom: 0;
+        border-bottom: none;
+    }
+    #dataset-description-box .dataset-desc-name {
+        font-weight: 600;
+    }
+    #dataset-description-box .dataset-desc-meta {
+        color: #57606a;
+        font-size: 0.85em;
+    }
+    .dataset-type-legend {
+        display: flex;
+        gap: 14px;
+        margin-top: 4px;
+        font-size: 0.8em;
+        color: #57606a;
+    }
+    .dataset-type-legend .legend-swatch {
+        display: inline-block;
+        width: 10px;
+        height: 10px;
+        border-radius: 2px;
+        margin-right: 4px;
+        vertical-align: middle;
+        border: 1px solid #d0d7de;
+    }
+</style>
 {% endblock %}
 
 {% block content %}
@@ -18,20 +94,31 @@
     <h2>🔎 Filters</h2>
     <p class="filter-help">Select criteria to filter the catalogue. Use Ctrl/Cmd to select multiple options.</p>
     <form id="filter-form">
-        <div class="filter-row">
-            <div class="filter-group">
-                <label class="filter-label"><span class="icon">📝</span> SAFE SLC</label>
-                <input type="text" id="slc-filter" placeholder="Partial match">
+        <div class="filter-row filter-row-top">
+            <div class="filter-left-column">
+                <div id="dataset-description-box">
+                    <p class="dataset-description-placeholder">Select one or more datasets to see their description here.</p>
+                </div>
+                <div class="filter-subrow">
+                    <div class="filter-group">
+                        <label class="filter-label"><span class="icon">📝</span> SAFE SLC</label>
+                        <input type="text" id="slc-filter" placeholder="Partial match">
+                    </div>
+                    <div class="filter-group">
+                        <label class="filter-label"><span class="icon">📝</span> SAFE GRD</label>
+                        <input type="text" id="grd-filter" placeholder="Partial match">
+                    </div>
+                </div>
             </div>
-            <div class="filter-group">
-                <label class="filter-label"><span class="icon">📝</span> SAFE GRD</label>
-                <input type="text" id="grd-filter" placeholder="Partial match">
-            </div>
-            <div class="filter-group">
+            <div class="filter-group dataset-column">
                 <label class="filter-label"><span class="icon">📁</span> Dataset</label>
                 <select id="dataset-filter" multiple>
                     <!-- Options will be populated dynamically -->
                 </select>
+                <div id="dataset-type-legend" class="dataset-type-legend">
+                    <span><span class="legend-swatch" style="background-color:#eaf2fb;"></span>SLC</span>
+                    <span><span class="legend-swatch" style="background-color:#eaf7ee;"></span>GRD</span>
+                </div>
             </div>
         </div>
         <div class="filter-row">
@@ -136,7 +223,7 @@
             });
     }
 
-    // Populate the dataset filter dropdown
+    // Populate the dataset filter dropdown (name only - description shown separately on selection)
     function populateDatasetFilter(metadata) {
         const select = document.getElementById('dataset-filter');
         if (!select) return;
@@ -147,14 +234,53 @@
             return;
         }
 
+        // Light, non-aggressive background tint per dataset type so SLC vs GRD
+        // (and any other type) are visually distinguishable at a glance.
+        const typeColors = {
+            'slc': '#eaf2fb',   // light blue
+            'grd': '#eaf7ee'    // light green
+        };
+        const defaultColor = '#f5f5f5'; // light grey fallback for unknown types
+
         let html = '';
         datasetNames.forEach(name => {
-            const desc = metadata[name]?.description || '';
-            const category = metadata[name]?.category || '';
-            const label = desc ? `${name} (${desc})` : name;
-            html += `<option value="${name}">${label}</option>`;
+            const type = (metadata[name]?.type || '').toLowerCase();
+            const label = type ? `${name} [${type}]` : name;
+            const bgColor = typeColors[type] || defaultColor;
+            html += `<option value="${name}" style="background-color: ${bgColor};">${label}</option>`;
         });
         select.innerHTML = html;
+
+        select.addEventListener('change', updateDatasetDescriptionBox);
+    }
+
+    // Show description(s) for the currently selected dataset(s), or a placeholder if none selected
+    function updateDatasetDescriptionBox() {
+        const select = document.getElementById('dataset-filter');
+        const box = document.getElementById('dataset-description-box');
+        if (!select || !box) return;
+
+        const selected = Array.from(select.selectedOptions).map(opt => opt.value);
+
+        if (selected.length === 0) {
+            box.innerHTML = '<p class="dataset-description-placeholder">Select one or more datasets to see their description here.</p>';
+            return;
+        }
+
+        let html = '';
+        selected.forEach(name => {
+            const meta = datasetMetadata[name] || {};
+            const description = meta.description || 'No description available.';
+            const category = meta.category || '';
+            const type = meta.type || '';
+            const metaParts = [type, category].filter(Boolean).join(' · ');
+            html += `<div class="dataset-desc-item">
+                <div class="dataset-desc-name">${name}</div>
+                ${metaParts ? `<div class="dataset-desc-meta">${metaParts}</div>` : ''}
+                <div>${description}</div>
+            </div>`;
+        });
+        box.innerHTML = html;
     }
 
     function getFilterState() {
@@ -537,6 +663,7 @@
                     e.preventDefault();
                     filterForm?.reset();
                     currentPage = 0;
+                    updateDatasetDescriptionBox();
                     const filters = getFilterState();
                     updateResultsTable(filters);
                     updateDatasetBarChart(filters);
