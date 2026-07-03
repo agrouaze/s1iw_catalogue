@@ -45,17 +45,28 @@ function populateDatasetFilter(metadata) {
         return;
     }
 
-    // Light, non-aggressive background tint per dataset type.
+    // Sort by count descending (highest first), then by name for ties
+    datasetNames.sort((a, b) => {
+        const countA = metadata[a].count || 0;
+        const countB = metadata[b].count || 0;
+        if (countA !== countB) {
+            return countB - countA; // descending
+        }
+        return a.localeCompare(b); // alphabetical for ties
+    });
+
     const typeColors = {
         'slc': '#eaf2fb',   // light blue
         'grd': '#eaf7ee'    // light green
     };
-    const defaultColor = '#f5f5f5'; // light grey fallback for unknown types
+    const defaultColor = '#f5f5f5';
 
     let html = '';
     datasetNames.forEach(name => {
-        const type = (metadata[name]?.type || '').toLowerCase();
-        const label = type ? `${name} [${type}]` : name;
+        const meta = metadata[name] || {};
+        const type = (meta.type || '').toLowerCase();
+        const count = meta.count || 0;
+        const label = type ? `${name} [${type}] (${count})` : `${name} (${count})`;
         const bgColor = typeColors[type] || defaultColor;
         html += `<option value="${name}" style="background-color: ${bgColor};">${label}</option>`;
     });
@@ -776,6 +787,8 @@ function updateMonthlyBarChart(filters) {
         plotDiv.innerHTML = `<p class="loading" style="color: #dc3545;">Error: ${error.message}</p>`;
     });
 }
+
+
 
 // ---------- Pagination helpers (state lives here, driven by filters.js) ----------
 

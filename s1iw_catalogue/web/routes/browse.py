@@ -437,3 +437,51 @@ async def get_monthly_counts(request: FilterRequest) -> dict[str, Any]:
         "series": series_sorted,
         "datasets": dataset_names,
     }
+
+
+
+
+@router.get("/datasets_metadata")
+async def get_datasets_metadata() -> dict[str, Any]:
+    if not catalogue_manager.is_loaded():
+        raise HTTPException(status_code=503, detail="Catalogue not loaded")
+
+    df = catalogue_manager.df
+    metadata = catalogue_manager.get_dataset_metadata() or {}
+
+    # Debug info
+    debug = {
+        "has_datasets_col": "datasets" in df.columns,
+        "dtype": str(df["datasets"].dtype) if "datasets" in df.columns else "absent",
+        "sample": df["datasets"].head(2).to_list() if "datasets" in df.columns else [],
+        "non_empty_rows": df.filter(pl.col("datasets").is_not_null()).height if "datasets" in df.columns else 0,
+        "metadata_keys": list(metadata.keys()),
+    }
+
+    # Compute counts
+    counts = {}
+    if "datasets" in df.columns and df["datasets"].dtype == pl.List(pl.Utf8):
+        exploded = df.explode("datasets")
+        counts_df = exploded.group_by("datasets").agg(pl.len())
+        counts = dict(zip(counts_df["datasets"], counts_df["len"]))
+
+    # Merge
+    result = {}
+    for ds_name, meta in metadata.items():
+        result[ds_name] = {
+            "description": meta.get("description", ""),
+            "category": meta.get("category", ""),
+            "type": meta.get("type", ""),
+            "count": counts.get(ds_name, 0),
+        }
+
+    for ds_name, count in counts.items():
+        if ds_name not in result:
+            result[ds_name] = {
+                "description": "",
+                "category": "",
+                "type": "",
+                "count": count,
+            }
+
+    return {"metadata": result, "debug": debug}

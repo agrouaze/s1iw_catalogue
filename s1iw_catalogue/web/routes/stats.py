@@ -151,22 +151,38 @@ async def get_presence_stats() -> dict[str, float]:
 # ---------- NEW ENDPOINT ----------
 @router.get("/datasets_metadata")
 async def get_datasets_metadata() -> dict[str, Any]:
-    """
-    Get dataset metadata (description, category, type) from the config file.
+    if not catalogue_manager.is_loaded():
+        raise HTTPException(status_code=503, detail="Catalogue not loaded")
 
-    Returns:
-        dict: Mapping of dataset_name -> {"description": str, "category": str, "type": str}
-    """
-    metadata = catalogue_manager.get_dataset_metadata()
+    df = catalogue_manager.df
+    metadata = catalogue_manager.get_dataset_metadata() or {}
 
-    if metadata is None:
-        raise HTTPException(
-            status_code=503,
-            detail="Dataset metadata not loaded. Please ensure S1IW_CONFIG_PATH is set."
-        )
+    # Compute counts per dataset
+    counts = {}
+    if "datasets" in df.columns and df["datasets"].dtype == pl.List(pl.Utf8):
+        exploded = df.explode("datasets")
+        counts_df = exploded.group_by("datasets").agg(pl.len())
+        counts = dict(zip(counts_df["datasets"], counts_df["len"]))
 
-    return {
-        "metadata": metadata,
-        "count": len(metadata),
-        "dataset_names": list(metadata.keys()),
-    }
+    # Build result with counts merged into metadata
+    result = {}
+    # Start with all datasets from metadata
+    for ds_name, meta in metadata.items():
+        result[ds_name] = {
+            "description": meta.get("description", ""),
+            "category": meta.get("category", ""),
+            "type": meta.get("type", ""),
+            "count": counts.get(ds_name, 0),
+        }
+
+    # Also include datasets that appear only in the catalogue (not in metadata)
+    for ds_name, count in counts.items():
+        if ds_name not in result:
+            result[ds_name] = {
+                "description": "",
+                "category": "",
+                "type": "",
+                "count": count,
+            }
+
+    return {"metadata": result}
