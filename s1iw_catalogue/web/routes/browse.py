@@ -1,14 +1,14 @@
 """Browse API routes for filtering and exploring catalogue content."""
 
 from typing import Any, Dict, List, Optional
-
+import io
 import json
 import logging
 import traceback
 
 import polars as pl
 import shapely
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Response
 from shapely import wkt
 from shapely.geometry import Point, mapping, shape
 import numpy as np
@@ -39,10 +39,6 @@ def apply_filters(df: pl.DataFrame, filter_req: FilterRequest) -> pl.DataFrame:
         # Dataset filter - check if any selected dataset is in the list
         if filter_req.datasets and len(filter_req.datasets) > 0:
             if "datasets" in df.columns:
-                # Use list.contains with any() to check overlap
-                # Create a condition: for any dataset in the list, check if it's in the array
-                # Polars: list.contains(element) returns a boolean expression
-                # We need to check if ANY of the selected datasets are in the list
                 condition = pl.lit(False)
                 for dataset in filter_req.datasets:
                     condition = condition | pl.col("datasets").list.contains(dataset)
@@ -89,21 +85,27 @@ def apply_filters(df: pl.DataFrame, filter_req: FilterRequest) -> pl.DataFrame:
             if "PATH OCN" in df.columns:
                 df = df.filter(pl.col("PATH OCN").is_null())
 
+        # L1B presence filter (for export use case)
+        if filter_req.has_l1b is True:
+            if "PATH L1B XSP A21" in df.columns:
+                df = df.filter(pl.col("PATH L1B XSP A21").is_not_null())
+        elif filter_req.has_l1b is False:
+            if "PATH L1B XSP A21" in df.columns:
+                df = df.filter(pl.col("PATH L1B XSP A21").is_null())
+
+        # L1C presence filter (for export use case)
+        if filter_req.has_l1c is True:
+            if "PATH L1C XSP B17" in df.columns:
+                df = df.filter(pl.col("PATH L1C XSP B17").is_not_null())
+        elif filter_req.has_l1c is False:
+            if "PATH L1C XSP B17" in df.columns:
+                df = df.filter(pl.col("PATH L1C XSP B17").is_null())
+
         return df
     except Exception as e:
-        import logging
-        import traceback
-
-        logger = logging.getLogger(__name__)
         logger.error(f"Error in apply_filters: {e}")
         logger.error(traceback.format_exc())
         raise
-
-
-import logging
-import traceback
-
-logger = logging.getLogger(__name__)
 
 
 @router.post("/filter")
@@ -113,14 +115,12 @@ async def filter_catalogue(request: FilterRequest) -> dict[str, Any]:
         if not catalogue_manager.is_loaded():
             raise HTTPException(status_code=503, detail="Catalogue not loaded")
 
-        # Debug logging
         logger.info(f"Filter request: datasets={request.datasets}")
         logger.info(f"Filter request: polarization={request.polarization}")
         logger.info(f"Filter request: satellites={request.satellites}")
 
         df = apply_filters(catalogue_manager.df, request)
 
-        # Select columns to return
         columns = [
             "SAFE SLC",
             "SAFE GRD",
@@ -145,6 +145,59 @@ async def filter_catalogue(request: FilterRequest) -> dict[str, Any]:
         logger.error(f"Error in filter_catalogue: {e}")
         logger.error(traceback.format_exc())
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/export")
+async def export_catalogue(request: FilterRequest) -> Response:
+    """
+    Export filtered catalogue as CSV with selected columns.
+    """
+    if not catalogue_manager.is_loaded():
+        raise HTTPException(status_code=503, detail="Catalogue not loaded")
+
+    # Hard limit to avoid large exports
+    MAX_EXPORT_ROWS = 10000
+
+    df = apply_filters(catalogue_manager.df, request)
+
+    if df.height == 0:
+        raise HTTPException(status_code=404, detail="No data found for the selected filters")
+
+    if df.height > MAX_EXPORT_ROWS:
+        raise HTTPException(
+            status_code=413,
+            detail=f"Too many rows ({df.height}). Please refine your filters. Maximum allowed: {MAX_EXPORT_ROWS}"
+        )
+
+    # Use requested columns or default to all
+    if request.columns and len(request.columns) > 0:
+        selected_cols = [c for c in request.columns if c in df.columns]
+        if not selected_cols:
+            raise HTTPException(status_code=400, detail="No valid columns selected for export")
+        df = df.select(selected_cols)
+    else:
+        # Default: all columns except large geometry columns (optional)
+        exclude = ["polygon SLC", "polygon GRD"]
+        selected_cols = [c for c in df.columns if c not in exclude]
+        df = df.select(selected_cols)
+
+    # to avoid list (imbricated list) columns in CSV, we can join them into a string
+    list_cols = [c for c in df.columns if df[c].dtype == pl.List(pl.Utf8)]
+    for col in list_cols:
+        df = df.with_columns(
+            pl.col(col).list.join(", ").alias(col)
+        )
+    # Convert Polars DataFrame to CSV
+    csv_data = df.write_csv()
+    csv_bytes = csv_data.encode('utf-8')
+
+    return Response(
+        content=csv_bytes,
+        media_type="text/csv",
+        headers={
+            "Content-Disposition": "attachment; filename=catalogue_export.csv"
+        }
+    )
 
 
 @router.post("/map")
@@ -174,8 +227,6 @@ async def get_map_data(request: MapRequest) -> dict[str, Any]:
             if geom.geom_type == "MultiPolygon":
                 geom = shapely.ops.unary_union(geom)
 
-            # Simplify polygon for web display
-            # Plus de simplification si beaucoup de polygones
             tolerance = 0.02 if df.height > 100 else 0.01
             geom = geom.simplify(tolerance)
             polygon_count += 1
@@ -204,7 +255,7 @@ async def get_map_data(request: MapRequest) -> dict[str, Any]:
         "features": features,
         "total": df.height,
         "polygon_count": polygon_count,
-        "is_point_mode": False,  # toujours des polygones
+        "is_point_mode": False,
     }
 
 
@@ -216,7 +267,6 @@ async def get_hs_tp_heatmap(request: HeatmapRequest) -> dict[str, Any]:
 
     df = apply_filters(catalogue_manager.df, request.filter)
 
-    # Filtrer les valeurs finies (non NaN, non inf)
     hs_tp_df = df.filter(
         pl.col("Hs WW3").is_finite() & pl.col("Tp WW3").is_finite()
     )
@@ -227,11 +277,9 @@ async def get_hs_tp_heatmap(request: HeatmapRequest) -> dict[str, Any]:
             "message": "No valid Hs/Tp data available for the selected filters",
         }
 
-    # Extraire les tableaux numpy
     hs = hs_tp_df["Hs WW3"].to_numpy()
     tp = hs_tp_df["Tp WW3"].to_numpy()
 
-    # Sécurité supplémentaire : supprimer les NaN
     mask = ~np.isnan(hs) & ~np.isnan(tp)
     hs = hs[mask]
     tp = tp[mask]
@@ -242,12 +290,10 @@ async def get_hs_tp_heatmap(request: HeatmapRequest) -> dict[str, Any]:
             "count": len(hs),
         }
 
-    # Calcul de la densité KDE
     data = np.vstack([hs, tp])
     kde = gaussian_kde(data)
     density = kde(data)
 
-    # Normalisation
     density_norm = density / density.max() if density.max() > 0 else density
 
     return {
@@ -268,7 +314,6 @@ async def get_wind_heatmap(request: HeatmapRequest) -> dict[str, Any]:
 
     df = apply_filters(catalogue_manager.df, request.filter)
 
-    # Filtrer les valeurs finies pour U10 et V10
     wind_df = df.filter(
         pl.col("U10 ecmwf").is_finite() & pl.col("V10 ecmwf").is_finite()
     )
@@ -279,14 +324,12 @@ async def get_wind_heatmap(request: HeatmapRequest) -> dict[str, Any]:
             "message": "No valid wind data available for the selected filters",
         }
 
-    # Calcul de la vitesse et direction (identique)
     wind_df = wind_df.with_columns([
         ((pl.col("U10 ecmwf")**2 + pl.col("V10 ecmwf")**2).sqrt()).alias("wind_speed"),
         ((180 + (180 / np.pi) * pl.arctan2(pl.col("U10 ecmwf"), pl.col("V10 ecmwf"))) % 360)
         .alias("wind_direction")
     ])
 
-    # Extraire et nettoyer
     directions = wind_df["wind_direction"].to_numpy()
     speeds = wind_df["wind_speed"].to_numpy()
     mask = ~np.isnan(directions) & ~np.isnan(speeds)
@@ -317,6 +360,7 @@ async def get_wind_heatmap(request: HeatmapRequest) -> dict[str, Any]:
         "count": len(speeds),
     }
 
+
 @router.post("/category_counts")
 async def get_category_counts(request: FilterRequest) -> dict[str, Any]:
     """Get counts of products per category."""
@@ -328,11 +372,11 @@ async def get_category_counts(request: FilterRequest) -> dict[str, Any]:
     if "category" not in df.columns:
         return {"counts": {}, "total": df.height}
 
-    # Group by category
     counts_df = df.group_by("category").agg(pl.len())
     counts = dict(zip(counts_df["category"], counts_df["len"]))
 
     return {"counts": counts, "total": df.height}
+
 
 @router.post("/daily_counts")
 async def get_daily_counts(request: FilterRequest) -> dict[str, Any]:
@@ -340,19 +384,16 @@ async def get_daily_counts(request: FilterRequest) -> dict[str, Any]:
     if not catalogue_manager.is_loaded():
         raise HTTPException(status_code=503, detail="Catalogue not loaded")
 
-    df = apply_filters(catalogue_manager.df, request)  # <-- FIX: pass request directly
+    df = apply_filters(catalogue_manager.df, request)
 
     if "start date SAFE" not in df.columns or "datasets" not in df.columns:
         return {"error": "Missing required columns"}
 
-    # Convert to date only (ignore time)
     df = df.with_columns(pl.col("start date SAFE").dt.date().alias("date"))
 
-    # Explode datasets and count per date+dataset
     exploded = df.explode("datasets")
     counts = exploded.group_by(["date", "datasets"]).agg(pl.len())
 
-    # Pivot to wide format
     pivot = counts.pivot(
         index="date",
         columns="datasets",
@@ -365,7 +406,6 @@ async def get_daily_counts(request: FilterRequest) -> dict[str, Any]:
     dataset_names = [c for c in pivot.columns if c != "date"]
     series = {ds: pivot[ds].to_list() for ds in dataset_names}
 
-    # Sort dates chronologically
     sorted_indices = sorted(range(len(dates)), key=lambda i: dates[i])
     dates_sorted = [dates[i] for i in sorted_indices]
     series_sorted = {ds: [series[ds][i] for i in sorted_indices] for ds in dataset_names}
@@ -375,6 +415,7 @@ async def get_daily_counts(request: FilterRequest) -> dict[str, Any]:
         "series": series_sorted,
         "datasets": dataset_names,
     }
+
 
 @router.post("/monthly_counts")
 async def get_monthly_counts(request: FilterRequest) -> dict[str, Any]:
@@ -387,16 +428,13 @@ async def get_monthly_counts(request: FilterRequest) -> dict[str, Any]:
     if "start date SAFE" not in df.columns or "datasets" not in df.columns:
         return {"error": "Missing required columns"}
 
-    # Truncate to month (first day of each month)
     df = df.with_columns(
         pl.col("start date SAFE").dt.truncate("1mo").alias("month")
     )
 
-    # Explode datasets and count per month+dataset
     exploded = df.explode("datasets")
     counts = exploded.group_by(["month", "datasets"]).agg(pl.len())
 
-    # Pivot to wide format
     pivot = counts.pivot(
         index="month",
         columns="datasets",
@@ -409,12 +447,10 @@ async def get_monthly_counts(request: FilterRequest) -> dict[str, Any]:
     dataset_names = [c for c in pivot.columns if c != "month"]
     series = {ds: pivot[ds].to_list() for ds in dataset_names}
 
-    # Sort months chronologically
     sorted_indices = sorted(range(len(months)), key=lambda i: months[i])
     months_sorted = [months[i] for i in sorted_indices]
     series_sorted = {ds: [series[ds][i] for i in sorted_indices] for ds in dataset_names}
 
-    # Format months as strings for display (e.g., "2025-01")
     month_labels = [m.strftime("%Y-%m") for m in months_sorted]
 
     return {
@@ -422,8 +458,6 @@ async def get_monthly_counts(request: FilterRequest) -> dict[str, Any]:
         "series": series_sorted,
         "datasets": dataset_names,
     }
-
-
 
 
 @router.get("/datasets_metadata")
@@ -434,7 +468,6 @@ async def get_datasets_metadata() -> dict[str, Any]:
     df = catalogue_manager.df
     metadata = catalogue_manager.get_dataset_metadata() or {}
 
-    # Debug info
     debug = {
         "has_datasets_col": "datasets" in df.columns,
         "dtype": str(df["datasets"].dtype) if "datasets" in df.columns else "absent",
@@ -443,14 +476,12 @@ async def get_datasets_metadata() -> dict[str, Any]:
         "metadata_keys": list(metadata.keys()),
     }
 
-    # Compute counts
     counts = {}
     if "datasets" in df.columns and df["datasets"].dtype == pl.List(pl.Utf8):
         exploded = df.explode("datasets")
         counts_df = exploded.group_by("datasets").agg(pl.len())
         counts = dict(zip(counts_df["datasets"], counts_df["len"]))
 
-    # Merge
     result = {}
     for ds_name, meta in metadata.items():
         result[ds_name] = {

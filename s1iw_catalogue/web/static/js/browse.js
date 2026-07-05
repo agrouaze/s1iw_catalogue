@@ -10,11 +10,11 @@ const pageSize = 100;
 
 // Couleurs par satellite (cohérentes avec la carte)
 const satelliteColors = {
-            'S1A': '#e63946',   // rouge vif
-            'S1B': '#457b9d',   // bleu moyen
-            'S1C': '#2a9d8f',   // vert-bleu
-            'S1D': '#e9c46a'    // jaune/or
-        };
+    'S1A': '#e63946',   // rouge vif
+    'S1B': '#457b9d',   // bleu moyen
+    'S1C': '#2a9d8f',   // vert-bleu
+    'S1D': '#e9c46a'    // jaune/or
+};
 const DEFAULT_SATELLITE_COLOR = '#9f7aea'; // violet
 
 // ---------- Dataset metadata & description box ----------
@@ -113,9 +113,95 @@ function updateDatasetDescriptionBox() {
     box.innerHTML = html;
 }
 
+// ---------- Export CSV ----------
+
+function exportCSV(filters) {
+    const button = document.getElementById('export-csv-btn');
+    const originalText = button ? button.textContent : 'Export CSV';
+    if (button) {
+        button.textContent = '⏳ Exporting...';
+        button.disabled = true;
+    }
+
+    const payload = {
+        ...filters,
+        limit: 10000,
+        columns: [
+            "SAFE SLC", "SAFE GRD", "SAFE OCN",
+            "datasets", "category",
+            "start date SAFE", "horodating",
+            "polarization", "unit",
+            "PATH SLC", "PATH GRD", "PATH OCN",
+            "PATH L1B XSP A21", "PATH L1C XSP B17",
+            "PATH L2 WAV E11", "PATH L2 WAV E13"
+        ]
+    };
+
+    fetch('/api/browse/export', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+    })
+    .then(response => {
+        if (!response.ok) {
+            // Try to parse error as JSON, fallback to text
+            return response.text().then(text => {
+                let errorMsg = text;
+                try {
+                    const json = JSON.parse(text);
+                    if (json.detail) {
+                        errorMsg = json.detail;
+                    } else if (json.message) {
+                        errorMsg = json.message;
+                    }
+                } catch (e) {
+                    // If text is not JSON, use it as is
+                    if (text) errorMsg = text;
+                }
+                throw new Error(errorMsg);
+            });
+        }
+        return response.blob();
+    })
+    .then(blob => {
+        const url = window.URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = 'catalogue_export.csv';
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        window.URL.revokeObjectURL(url);
+        window.showToast('✅ CSV exported successfully');
+    })
+    .catch(error => {
+        console.error('Export error:', error);
+        // Extract meaningful error message
+        let errorMsg = error.message || 'Unknown error';
+        // Try to parse if it's a stringified object
+        if (typeof errorMsg === 'string' && errorMsg.startsWith('{')) {
+            try {
+                const parsed = JSON.parse(errorMsg);
+                if (parsed.detail) errorMsg = parsed.detail;
+                else if (parsed.message) errorMsg = parsed.message;
+            } catch (e) {
+                // Keep original
+            }
+        }
+        window.showToast(`❌ Export failed: ${errorMsg}`);
+        console.error('Export error details:', error);
+    })
+    .finally(() => {
+        if (button) {
+            button.textContent = originalText;
+            button.disabled = false;
+        }
+    });
+}
+
 // ---------- Results table ----------
 
-function updateResultsTable(filters) {
+function updateResultsTable(filters, onTotalCount) {
     const tableDiv = document.getElementById('results-table');
     const countDiv = document.getElementById('results-count');
     if (!tableDiv) return;
@@ -137,8 +223,18 @@ function updateResultsTable(filters) {
     .then(data => {
         const rows = data.rows || [];
         const total = data.total || 0;
+        
+        // Update total count via callback
+        if (onTotalCount) {
+            onTotalCount(total);
+        }
+
         if (countDiv) {
-            countDiv.textContent = `Showing ${filters.offset + 1}-${Math.min(filters.offset + rows.length, total)} of ${total} results`;
+            const start = filters.offset + 1;
+            const end = Math.min(filters.offset + rows.length, total);
+            countDiv.textContent = total === 0 
+                ? 'No results found' 
+                : `Showing ${start}-${end} of ${total} results`;
         }
 
         let html = '<table class="table"><thead><tr><th>SAFE SLC</th><th>SAFE GRD</th><th>Dataset</th><th>Start Date</th><th>Polarization</th><th>Satellite</th></tr></thead><tbody>';
@@ -147,7 +243,6 @@ function updateResultsTable(filters) {
         } else {
             rows.forEach(row => {
                 const datasets = row['datasets'] || [];
-                // Map dataset names to display names with descriptions
                 const displayDatasets = datasets.map(ds => {
                     const desc = datasetMetadata[ds]?.description || '';
                     return desc ? `${ds} (${desc})` : ds;
@@ -170,6 +265,11 @@ function updateResultsTable(filters) {
         if (pageInfo) {
             pageInfo.textContent = `Page ${currentPage + 1} of ${totalPages || 1}`;
         }
+        // Also update bottom page info if it exists
+        const pageInfoBottom = document.getElementById('page-info-bottom');
+        if (pageInfoBottom) {
+            pageInfoBottom.textContent = `Page ${currentPage + 1} of ${totalPages || 1}`;
+        }
         const prevBtn = document.getElementById('prev-page');
         const nextBtn = document.getElementById('next-page');
         if (prevBtn) prevBtn.disabled = currentPage === 0;
@@ -180,12 +280,13 @@ function updateResultsTable(filters) {
         if (tableDiv) {
             tableDiv.innerHTML = `<p class="loading" style="color: #dc3545;">Error: ${error.message}</p>`;
         }
+        if (onTotalCount) {
+            onTotalCount(0);
+        }
     });
 }
 
 // ---------- Dataset bar chart & polarization/satellite pie chart ----------
-// Both charts are derived from the same fetch (single request, up to 1000 rows)
-// to avoid firing two separate network calls for the same underlying data.
 
 function fetchAggregatesAndRender(filters) {
     fetch('/api/browse/filter', {
@@ -241,7 +342,6 @@ function renderDatasetBarChart(rows, total) {
         return;
     }
 
-    // Use display names with descriptions for labels
     const displayLabels = labels.map(ds => {
         const desc = datasetMetadata[ds]?.description || '';
         return desc ? `${ds} (${desc})` : ds;
@@ -298,14 +398,13 @@ function updateCategoryPieChart(filters) {
             return;
         }
 
-        // Light, non-aggressive palette for categories
         const categoryColors = {
-            'test': '#f2a8a8',     // soft red
-            'train': '#a8c8ec',    // soft blue
-            'val': '#a8e0c4',      // soft green
-            'undefined': '#d0d0d0' // soft grey
+            'test': '#f2a8a8',
+            'train': '#a8c8ec',
+            'val': '#a8e0c4',
+            'undefined': '#d0d0d0'
         };
-        const defaultColor = '#c9b8ea'; // purple fallback
+        const defaultColor = '#c9b8ea';
 
         const colors = labels.map(cat => categoryColors[cat] || defaultColor);
 
@@ -358,11 +457,10 @@ function renderPolarizationSatellitePieChart(rows, total) {
         plotDiv.innerHTML = '<p class="loading">No polarization/satellite data available</p>';
         return;
     }
+
     const satLabels = Object.keys(satelliteCounts);
     const satValues = Object.values(satelliteCounts);
     const satColors = satLabels.map(sat => satelliteColors[sat] || DEFAULT_SATELLITE_COLOR);
-    // Light, non-aggressive palette
-    // const softColors = ['#a8c8ec', '#a8e0c4', '#f6cf9e', '#f2a8a8', '#c9b8ea', '#f6e39e'];
 
     const polTrace = {
         type: 'pie',
@@ -403,7 +501,6 @@ function renderPolarizationSatellitePieChart(rows, total) {
 
 // ---------- Map ----------
 function updateMap(filters) {
-
     const plotDiv = document.getElementById('map-plot');
     if (!plotDiv) return;
     plotDiv.innerHTML = '<p class="loading">Loading map data...</p>';
@@ -424,18 +521,7 @@ function updateMap(filters) {
             return;
         }
 
-        // Couleurs plus vives pour chaque satellite
-        // const satelliteColors = {
-        //     'S1A': '#e63946',   // rouge vif
-        //     'S1B': '#457b9d',   // bleu moyen
-        //     'S1C': '#2a9d8f',   // vert-bleu
-        //     'S1D': '#e9c46a'    // jaune/or
-        // };
-        // const defaultColor = '#9f7aea';
-
-        // Ordre des satellites pour la légende
         const satelliteOrder = ['S1A', 'S1B', 'S1C', 'S1D'];
-
         let traces = [];
         let usedSatellites = new Set();
 
@@ -481,7 +567,7 @@ function updateMap(filters) {
                 text: [hoverText],
                 hoverinfo: 'text',
                 hoverlabel: { bgcolor: 'white', font: { size: 12 } },
-                name: sat  // pour la légende (regroupé automatiquement si même nom)
+                name: sat
             };
             traces.push(trace);
         });
@@ -491,7 +577,6 @@ function updateMap(filters) {
             return;
         }
 
-        // Centrage (inchangé)
         let allLons = [], allLats = [];
         traces.forEach(t => { allLons.push(...t.lon); allLats.push(...t.lat); });
         let centerLon = 0, centerLat = 20, zoom = 2;
@@ -507,14 +592,13 @@ function updateMap(filters) {
             else zoom = 2;
         }
 
-        // Construction de la légende personnalisée (carrés de couleur)
         let annotations = [];
         let legendX = 0.02;
         let legendY = 0.98;
         let stepY = 0.05;
         satelliteOrder.forEach(sat => {
             if (!usedSatellites.has(sat)) return;
-            const color = satelliteColors[sat] || defaultColor;
+            const color = satelliteColors[sat] || DEFAULT_SATELLITE_COLOR;
             annotations.push({
                 x: legendX,
                 y: legendY,
@@ -539,7 +623,7 @@ function updateMap(filters) {
             margin: { l: 0, r: 0, t: 0, b: 0 },
             height: 280,
             hovermode: 'closest',
-            showlegend: false,  // on utilise des annotations à la place
+            showlegend: false,
             annotations: annotations
         };
 
@@ -555,6 +639,7 @@ function updateMap(filters) {
         plotDiv.innerHTML = `<p class="loading" style="color: #dc3545;">Error: ${error.message}</p>`;
     });
 }
+
 // ---------- Hs/Tp heatmap ----------
 
 function updateHsTpHeatmap(filters) {
@@ -612,7 +697,6 @@ function updateHsTpHeatmap(filters) {
     });
 }
 
-
 function updateWindHeatmap(filters) {
     const plotDiv = document.getElementById('wind-plot');
     if (!plotDiv) return;
@@ -634,7 +718,6 @@ function updateWindHeatmap(filters) {
         return response.json();
     })
     .then(data => {
-        const plotDiv = document.getElementById('wind-plot');
         if (data.data && data.data.speed && data.data.speed.length > 0) {
             const trace = {
                 x: data.data.direction,
@@ -642,7 +725,7 @@ function updateWindHeatmap(filters) {
                 mode: 'markers',
                 marker: {
                     size: 6,
-                    color: data.data.density,   // <-- density as color
+                    color: data.data.density,
                     colorscale: 'Viridis',
                     showscale: true,
                     colorbar: { title: 'Density' },
@@ -665,80 +748,11 @@ function updateWindHeatmap(filters) {
     })
     .catch(error => {
         console.error('Error fetching wind data:', error);
-        const plotDiv = document.getElementById('wind-plot');
         plotDiv.innerHTML = `<p class="loading" style="color: #dc3545;">Error: ${error.message}</p>`;
     });
 }
 
 // ---------- count per day ----------
-
-function updateDailyBarChart(filters) {
-    const plotDiv = document.getElementById('daily-bar-chart');
-    if (!plotDiv) return;
-
-    fetch('/api/browse/daily_counts', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(filters)
-    })
-    .then(response => {
-        if (!response.ok) {
-            return response.text().then(text => {
-                throw new Error(`HTTP ${response.status}: ${text.substring(0, 200)}`);
-            });
-        }
-        return response.json();
-    })
-    .then(data => {
-        if (data.error) {
-            plotDiv.innerHTML = `<p class="loading" style="color: #dc3545;">Error: ${data.error}</p>`;
-            return;
-        }
-
-        const dates = data.dates || [];
-        const series = data.series || {};
-        const datasetNames = data.datasets || [];
-
-        if (dates.length === 0 || datasetNames.length === 0) {
-            plotDiv.innerHTML = '<p class="loading">No daily data available</p>';
-            return;
-        }
-
-        // Build traces: one per dataset
-        // Use a light, distinct color palette
-        const colors = ['#a8c8ec', '#a8e0c4', '#f6cf9e', '#f2a8a8', '#c9b8ea', '#f6e39e', '#b8d4e3', '#d4b8d4'];
-        const traces = datasetNames.map((ds, idx) => ({
-            x: dates,
-            y: series[ds],
-            name: ds,
-            type: 'bar',
-            marker: { color: colors[idx % colors.length] },
-            text: series[ds].map(v => v.toString()),
-            textposition: 'inside',
-            insidetextanchor: 'middle',
-            hovertemplate: `%{x}<br>%{fullData.name}: %{y}<extra></extra>`,
-        }));
-
-        const layout = {
-            barmode: 'stack',
-            title: `Daily Product Counts (${dates.length} days)`,
-            xaxis: { title: 'Date', type: 'category' },
-            yaxis: { title: 'Number of products' },
-            height: 300,
-            margin: { l: 50, r: 20, t: 40, b: 50 },
-            legend: { orientation: 'h', y: 1.1, x: 0.5, xanchor: 'center' },
-            hovermode: 'x unified',
-        };
-
-        Plotly.newPlot('daily-bar-chart', traces, layout, { responsive: true });
-    })
-    .catch(error => {
-        console.error('Error fetching daily counts:', error);
-        plotDiv.innerHTML = `<p class="loading" style="color: #dc3545;">Error: ${error.message}</p>`;
-    });
-}
-
-
 
 function updateMonthlyBarChart(filters) {
     const plotDiv = document.getElementById('daily-bar-chart');
@@ -804,9 +818,31 @@ function updateMonthlyBarChart(filters) {
     });
 }
 
+// ---------- Toast notification ----------
 
+function showToast(message) {
+    const toast = document.getElementById('toast');
+    const msgEl = document.getElementById('toast-message');
+    if (!toast || !msgEl) return;
 
-// ---------- Pagination helpers (state lives here, driven by filters.js) ----------
+    msgEl.textContent = message;
+    toast.classList.add('show');
+
+    clearTimeout(window.toastTimeout);
+    window.toastTimeout = setTimeout(() => {
+        hideToast();
+    }, 3500);
+}
+
+function hideToast() {
+    const toast = document.getElementById('toast');
+    if (toast) {
+        toast.classList.remove('show');
+        clearTimeout(window.toastTimeout);
+    }
+}
+
+// ---------- Pagination helpers ----------
 
 function getCurrentPage() {
     return currentPage;
@@ -824,7 +860,7 @@ function resetPageToFirst() {
     currentPage = 0;
 }
 
-// ---------- Expose the public API used by filters.js / browse.html ----------
+// ---------- Expose the public API ----------
 
 window.loadDatasetMetadata = loadDatasetMetadata;
 window.updateDatasetDescriptionBox = updateDatasetDescriptionBox;
@@ -832,6 +868,12 @@ window.updateResultsTable = updateResultsTable;
 window.fetchAggregatesAndRender = fetchAggregatesAndRender;
 window.updateMap = updateMap;
 window.updateHsTpHeatmap = updateHsTpHeatmap;
+window.updateWindHeatmap = updateWindHeatmap;
+window.updateCategoryPieChart = updateCategoryPieChart;
+window.updateMonthlyBarChart = updateMonthlyBarChart;
+window.exportCSV = exportCSV;
+window.showToast = showToast;
+window.hideToast = hideToast;
 window.getCurrentPage = getCurrentPage;
 window.decrementPage = decrementPage;
 window.incrementPage = incrementPage;

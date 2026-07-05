@@ -1,8 +1,7 @@
 """Pydantic models for web API request/response validation."""
 
-from typing import Any, Dict, List, Optional
-
 from datetime import datetime
+from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel, Field
 
@@ -23,7 +22,10 @@ class FilterRequest(BaseModel):
     has_slc: bool | None = Field(None, description="Only products with SLC presence")
     has_grd: bool | None = Field(None, description="Only products with GRD presence")
     has_ocn: bool | None = Field(None, description="Only products with OCN presence")
-    limit: int = Field(100, ge=1, le=1000, description="Max number of results")
+    has_l1b: bool | None = Field(None, description="Only products with L1B presence")
+    has_l1c: bool | None = Field(None, description="Only products with L1C presence")
+    columns: list[str] | None = Field(None, description="Columns to export (for CSV export)")
+    limit: int = Field(100, ge=1, le=10000, description="Max number of results")
     offset: int = Field(0, ge=0, description="Pagination offset")
 
 

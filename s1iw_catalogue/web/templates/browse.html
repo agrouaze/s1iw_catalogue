@@ -5,82 +5,6 @@
 {% block extra_head %}
 <link rel="stylesheet" href="/static/css/browse.css">
 <script src="https://cdn.jsdelivr.net/npm/@turf/turf@6/turf.min.js"></script>
-<style>
-    #dataset-filter {
-        min-height: 220px;
-        width: 100%;
-    }
-    .filter-row-top {
-        display: grid;
-        grid-template-columns: 1.2fr 1fr;
-        gap: 20px;
-        align-items: stretch;
-    }
-    .filter-left-column {
-        display: flex;
-        flex-direction: column;
-        gap: 12px;
-    }
-    .filter-subrow {
-        display: flex;
-        gap: 12px;
-    }
-    .filter-subrow .filter-group {
-        flex: 1;
-    }
-    .dataset-column {
-        display: flex;
-        flex-direction: column;
-    }
-    #dataset-description-box {
-        flex: 1;
-        padding: 10px 12px;
-        border: 1px solid #d0d7de;
-        border-radius: 6px;
-        background: #f6f8fa;
-        font-size: 0.9em;
-        overflow-y: auto;
-        min-height: 150px;
-    }
-    #dataset-description-box .dataset-description-placeholder {
-        color: #8b949e;
-        font-style: italic;
-        margin: 0;
-    }
-    #dataset-description-box .dataset-desc-item {
-        margin-bottom: 8px;
-        padding-bottom: 8px;
-        border-bottom: 1px solid #e1e4e8;
-    }
-    #dataset-description-box .dataset-desc-item:last-child {
-        margin-bottom: 0;
-        padding-bottom: 0;
-        border-bottom: none;
-    }
-    #dataset-description-box .dataset-desc-name {
-        font-weight: 600;
-    }
-    #dataset-description-box .dataset-desc-meta {
-        color: #57606a;
-        font-size: 0.85em;
-    }
-    .dataset-type-legend {
-        display: flex;
-        gap: 14px;
-        margin-top: 4px;
-        font-size: 0.8em;
-        color: #57606a;
-    }
-    .dataset-type-legend .legend-swatch {
-        display: inline-block;
-        width: 10px;
-        height: 10px;
-        border-radius: 2px;
-        margin-right: 4px;
-        vertical-align: middle;
-        border: 1px solid #d0d7de;
-    }
-</style>
 {% endblock %}
 
 {% block content %}
@@ -89,71 +13,142 @@
     <p class="subtitle">Explore products with filters and visualizations</p>
 </div>
 
-<!-- Filters -->
-<div class="filter-section">
-    <h2>🔎 Filters</h2>
-    <p class="filter-help">Select criteria to filter the catalogue. Use Ctrl/Cmd to select multiple options.</p>
-    <form id="filter-form">
-        <div class="filter-row filter-row-top">
-            <div class="filter-left-column">
-                <div id="dataset-description-box">
-                    <p class="dataset-description-placeholder">Select one or more datasets to see their description here.</p>
-                </div>
-                <div class="filter-subrow">
-                    <div class="filter-group">
-                        <label class="filter-label"><span class="icon">📝</span> SAFE SLC</label>
-                        <input type="text" id="slc-filter" placeholder="Partial match">
-                    </div>
-                    <div class="filter-group">
-                        <label class="filter-label"><span class="icon">📝</span> SAFE GRD</label>
-                        <input type="text" id="grd-filter" placeholder="Partial match">
-                    </div>
-                </div>
-            </div>
-            <div class="filter-group dataset-column">
-                <label class="filter-label"><span class="icon">📁</span> Dataset</label>
-                <select id="dataset-filter" multiple>
-                    <!-- Options will be populated dynamically -->
-                </select>
-                <div id="dataset-type-legend" class="dataset-type-legend">
-                    <span><span class="legend-swatch" style="background-color:#eaf2fb;"></span>SLC</span>
-                    <span><span class="legend-swatch" style="background-color:#eaf7ee;"></span>GRD</span>
-                </div>
-            </div>
-        </div>
-        <div class="filter-row">
-            <div class="filter-group">
-                <label class="filter-label"><span class="icon">🔬</span> Polarization</label>
-                <select id="polarization-filter" multiple>
-                    <option value="1SDV">1SDV</option>
-                    <option value="1SSV">1SSV</option>
-                    <option value="1SDH">1SDH</option>
-                    <option value="1SSH">1SSH</option>
-                </select>
-            </div>
-            <div class="filter-group">
-                <label class="filter-label"><span class="icon">🛰️</span> Satellite</label>
-                <select id="satellite-filter" multiple>
-                    <option value="S1A">S1A</option>
-                    <option value="S1B">S1B</option>
-                    <option value="S1C">S1C</option>
-                    <option value="S1D">S1D</option>
-                </select>
-            </div>
-            <div class="filter-group">
-                <label class="filter-label"><span class="icon">📅</span> Date range</label>
-                <div class="date-range">
-                    <input type="date" id="date-start" placeholder="Start">
-                    <input type="date" id="date-end" placeholder="End">
-                </div>
-            </div>
-            <div class="filter-group filter-actions">
-                <button type="submit" class="btn btn-primary">Apply Filters</button>
-                <button type="reset" class="btn btn-secondary">Reset</button>
-            </div>
-        </div>
-    </form>
+<!-- Collapsible Filters -->
+<div class="filter-toggle">
+    <button id="filter-toggle-btn" class="filter-toggle-btn">
+        <span id="filter-toggle-icon">▶</span> Filters
+        <span id="filter-count-badge" class="filter-count-badge"></span>
+    </button>
 </div>
+
+<div id="filter-panel" class="filter-panel">
+    <div class="filter-section">
+        <form id="filter-form">
+            <!-- Dataset description box -->
+            <div class="filter-row">
+                <div class="filter-group" style="flex:2;">
+                    <div id="dataset-description-box">
+                        <p class="dataset-description-placeholder">Select one or more datasets to see their description here.</p>
+                    </div>
+                </div>
+            </div>
+
+            <div class="filter-row filter-row-top">
+                <div class="filter-left-column">
+                    <div class="filter-subrow">
+                        <div class="filter-group">
+                            <label class="filter-label"><span class="icon">📝</span> SAFE SLC</label>
+                            <input type="text" id="slc-filter" placeholder="Partial match">
+                        </div>
+                        <div class="filter-group">
+                            <label class="filter-label"><span class="icon">📝</span> SAFE GRD</label>
+                            <input type="text" id="grd-filter" placeholder="Partial match">
+                        </div>
+                    </div>
+                </div>
+                <div class="filter-group dataset-column">
+                    <label class="filter-label"><span class="icon">📁</span> Dataset</label>
+                    <select id="dataset-filter" multiple>
+                        <!-- Options will be populated dynamically -->
+                    </select>
+                    <div id="dataset-type-legend" class="dataset-type-legend">
+                        <span><span class="legend-swatch" style="background-color:#eaf2fb;"></span>SLC</span>
+                        <span><span class="legend-swatch" style="background-color:#eaf7ee;"></span>GRD</span>
+                    </div>
+                </div>
+            </div>
+
+            <div class="filter-row">
+                <div class="filter-group">
+                    <label class="filter-label"><span class="icon">🔬</span> Polarization</label>
+                    <select id="polarization-filter" multiple>
+                        <option value="1SDV">1SDV</option>
+                        <option value="1SSV">1SSV</option>
+                        <option value="1SDH">1SDH</option>
+                        <option value="1SSH">1SSH</option>
+                    </select>
+                </div>
+                <div class="filter-group">
+                    <label class="filter-label"><span class="icon">🛰️</span> Satellite</label>
+                    <select id="satellite-filter" multiple>
+                        <option value="S1A">S1A</option>
+                        <option value="S1B">S1B</option>
+                        <option value="S1C">S1C</option>
+                        <option value="S1D">S1D</option>
+                    </select>
+                </div>
+                <div class="filter-group">
+                    <label class="filter-label"><span class="icon">📅</span> Date range</label>
+                    <div class="date-range">
+                        <input type="date" id="date-start" placeholder="Start">
+                        <input type="date" id="date-end" placeholder="End">
+                    </div>
+                </div>
+            </div>
+
+            <div class="filter-row">
+                <div class="filter-group" style="flex:2;">
+                    <label class="filter-label"><span class="icon">📦</span> Presence</label>
+                    <div class="presence-toggles">
+                        <div class="toggle-group" data-col="slc">
+                            <span class="toggle-label">SLC</span>
+                            <div class="toggle-btn" data-state="neutral" title="Neutral (no filter)">
+                                <span class="toggle-icon">⚪</span>
+                            </div>
+                        </div>
+                        <div class="toggle-group" data-col="grd">
+                            <span class="toggle-label">GRD</span>
+                            <div class="toggle-btn" data-state="neutral" title="Neutral (no filter)">
+                                <span class="toggle-icon">⚪</span>
+                            </div>
+                        </div>
+                        <div class="toggle-group" data-col="ocn">
+                            <span class="toggle-label">OCN</span>
+                            <div class="toggle-btn" data-state="neutral" title="Neutral (no filter)">
+                                <span class="toggle-icon">⚪</span>
+                            </div>
+                        </div>
+                        <div class="toggle-group" data-col="l1b">
+                            <span class="toggle-label">L1B</span>
+                            <div class="toggle-btn" data-state="neutral" title="Neutral (no filter)">
+                                <span class="toggle-icon">⚪</span>
+                            </div>
+                        </div>
+                        <div class="toggle-group" data-col="l1c">
+                            <span class="toggle-label">L1C</span>
+                            <div class="toggle-btn" data-state="neutral" title="Neutral (no filter)">
+                                <span class="toggle-icon">⚪</span>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="toggle-legend">
+                        <span><span class="legend-dot neutral-dot"></span> Neutral</span>
+                        <span><span class="legend-dot with-dot"></span> With</span>
+                        <span><span class="legend-dot without-dot"></span> Without</span>
+                    </div>
+                </div>
+                <div class="filter-group filter-actions">
+                    <button type="submit" class="btn btn-primary">Apply Filters</button>
+                    <button type="reset" class="btn btn-secondary">Reset</button>
+                    <button type="button" id="export-csv-btn" class="export-btn">📥 Export CSV</button>
+                </div>
+            </div>
+        </form>
+    </div>
+</div>
+
+<!-- Results count -->
+<div class="results-header">
+    <div class="results-header-left">
+        <h2>📋 Filtered Results</h2>
+        <span id="total-results-count" class="total-results-count">0 products</span>
+    </div>
+    <div class="results-header-right">
+        <span id="page-info" class="page-info">Page 1</span>
+    </div>
+</div>
+
+<div id="results-count" class="results-count"></div>
 
 <!-- Visualizations Grid -->
 <div class="viz-grid">
@@ -186,12 +181,9 @@
         <div id="category-pie-plot" class="plot-container"><p class="loading">Loading category data...</p></div>
     </div>
 </div>
-</div>
 
 <!-- Results Table -->
 <div class="results-section">
-    <h2>📋 Filtered Results</h2>
-    <div id="results-count" class="results-count"></div>
     <div class="results-scroll">
         <div class="table-wrapper" id="results-table">
             <p class="loading">Apply filters to see results</p>
@@ -199,7 +191,7 @@
     </div>
     <div id="pagination">
         <button id="prev-page" class="btn btn-secondary" disabled>◀ Previous</button>
-        <span class="page-info" id="page-info">Page 1</span>
+        <span class="page-info" id="page-info-bottom">Page 1</span>
         <button id="next-page" class="btn btn-secondary" disabled>Next ▶</button>
     </div>
 </div>
