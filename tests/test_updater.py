@@ -181,10 +181,7 @@ class TestBuildFromListings:
             df["SAFE SLC"][0]
             == "S1A_IW_SLC__1SDV_20250101T000000_20250101T000027_000001_000001_0001.SAFE"
         )
-        # assert df["datasets"][0] == ["test_slc"]
         assert df.select(pl.col("datasets")).row(0)[0] == ["test_slc"]
-        # category should be set after compute_category step, but build_from_listings doesn't set it.
-        # It will be None. So we don't check it here.
 
     def test_build_from_listings_mixed(self, tmp_path, updater):
         slc_path = tmp_path / "slc.txt"
@@ -340,7 +337,6 @@ class TestMergeLinkedRows:
         assert merged.height == 1
         datasets = merged["datasets"][0]
         assert sorted(datasets) == ["ds1", "ds2"]
-        # Category should be val (priority 2 > train priority 1)
         assert merged["category"][0] == "val"
         assert merged["horodating"][0] == datetime.datetime(2025, 1, 1, 12)
 
@@ -501,7 +497,6 @@ class TestMergeCatalogues:
         assert merged.height == 3
         slc2_row = merged.filter(pl.col("SAFE SLC") == "SLC2")
         assert sorted(slc2_row["datasets"][0]) == ["ds2", "ds2_new"]
-        # Category priority: test (3) > val (2) > train (1)
         assert slc2_row["category"][0] == "test"
         assert slc2_row["horodating"][0] == datetime.datetime(2025, 1, 3)
 
@@ -636,13 +631,13 @@ class TestLinkOcnToGrd:
             "SAFE SLC": [None],
             "SAFE GRD": [grd_name],
             "SAFE OCN": [None],
-            "presence SLC": [None],
-            "presence GRD": [None],
-            "presence OCN": [None],
-            "presence L1B XSP A21": [None],
-            "presence L1C XSP B17": [None],
-            "dataset(s) d'appartenance": [[]],
-            "dataset_category": [None],
+            "PATH SLC": [None],
+            "PATH GRD": [None],
+            "PATH OCN": [None],
+            "PATH L1B XSP A21": [None],
+            "PATH L1C XSP B17": [None],
+            "datasets": [[]],
+            "category": [None],
             "Hs WW3": [None],
             "Tp WW3": [None],
             "U10 ecmwf": [None],
@@ -667,19 +662,19 @@ class TestLinkOcnToGrd:
         self, mock_batch: MagicMock, updater: CatalogueUpdater
     ) -> None:
         """Test OCN marked as NOT_FOUND when CDSE returns empty mapping."""
-        mock_batch.return_value = {}  # Simulate OCN not found
+        mock_batch.return_value = {}
         grd_name = "GRD1"
         data = {
             "SAFE SLC": [None],
             "SAFE GRD": [grd_name],
             "SAFE OCN": [None],
-            "presence SLC": [None],
-            "presence GRD": [None],
-            "presence OCN": [None],
-            "presence L1B XSP A21": [None],
-            "presence L1C XSP B17": [None],
-            "dataset(s) d'appartenance": [[]],
-            "dataset_category": [None],
+            "PATH SLC": [None],
+            "PATH GRD": [None],
+            "PATH OCN": [None],
+            "PATH L1B XSP A21": [None],
+            "PATH L1C XSP B17": [None],
+            "datasets": [[]],
+            "category": [None],
             "Hs WW3": [None],
             "Tp WW3": [None],
             "U10 ecmwf": [None],
@@ -709,14 +704,14 @@ class TestLinkOcnToGrd:
         data = {
             "SAFE SLC": [None],
             "SAFE GRD": [grd_name],
-            "SAFE OCN": ["ALREADY_EXISTS"],  # OCN already here
-            "presence SLC": [None],
-            "presence GRD": [None],
-            "presence OCN": [None],
-            "presence L1B XSP A21": [None],
-            "presence L1C XSP B17": [None],
-            "dataset(s) d'appartenance": [[]],
-            "dataset_category": [None],
+            "SAFE OCN": ["ALREADY_EXISTS"],
+            "PATH SLC": [None],
+            "PATH GRD": [None],
+            "PATH OCN": [None],
+            "PATH L1B XSP A21": [None],
+            "PATH L1C XSP B17": [None],
+            "datasets": [[]],
+            "category": [None],
             "Hs WW3": [None],
             "Tp WW3": [None],
             "U10 ecmwf": [None],

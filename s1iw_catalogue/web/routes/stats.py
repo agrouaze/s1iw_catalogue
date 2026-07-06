@@ -18,7 +18,7 @@ router = APIRouter()
 
 
 @router.get("/global", response_model=GlobalStatsResponse)
-async def get_global_stats() -> Dict[str, Any]:
+async def get_global_stats() -> dict[str, Any]:
     """Get global statistics about the catalogue."""
     if not catalogue_manager.is_loaded():
         raise HTTPException(status_code=503, detail="Catalogue not loaded")

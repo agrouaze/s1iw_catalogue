@@ -30,7 +30,7 @@ def create_app(
 
             if config_path:
                 try:
-                    with open(config_path, "r") as f:
+                    with open(config_path) as f:
                         config_data = yaml.safe_load(f)
 
                     # ✅ Replicated logic from catalogue.py (no heavy imports!)
