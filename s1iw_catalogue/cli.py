@@ -19,7 +19,7 @@ logging.basicConfig(
 # =============================================================================
 # MAIN GROUP
 # =============================================================================
-@click.group()
+@click.group(context_settings={"help_option_names": ["-h", "--help"]})
 @click.option(
     "--config", "-c", type=click.Path(exists=True), help="Path to configuration file."
 )
