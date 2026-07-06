@@ -14,11 +14,11 @@ def mock_ww3_dataset():
     lons = np.linspace(-10, 10, 20)
     lats = np.linspace(45, 55, 20)
     times = pd.date_range("2023-01-15 00:00:00", periods=3, freq="3H")
-    
+
     # Create data
     hs_data = np.random.rand(len(times), len(lats), len(lons)) * 5  # 0-5m wave height
     t01_data = np.random.rand(len(times), len(lats), len(lons)) * 15 + 5  # 5-20s period
-    
+
     # Create dataset
     ds = xr.Dataset(
         {
@@ -29,7 +29,7 @@ def mock_ww3_dataset():
             "time": times,
             "latitude": lats,
             "longitude": lons,
-        }
+        },
     )
     return ds
 
@@ -42,7 +42,7 @@ def mock_catalogue_df():
         for lat in [48, 48.5]:
             poly = box(lon - 0.2, lat - 0.2, lon + 0.2, lat + 0.2)
             polygons.append(poly)
-    
+
     data = {
         "SAFE SLC": [f"S1A_IW_SLC_{i:03d}" for i in range(len(polygons))],
         "SAFE GRD": [f"S1A_IW_GRD_{i:03d}" for i in range(len(polygons))],
@@ -56,4 +56,4 @@ def mock_catalogue_df():
         "polarization": ["VV", "VH", "HV"] * (len(polygons) // 3 + 1),
         "unit": ["S1A", "S1A", "S1B"] * (len(polygons) // 3 + 1),
     }
-    return pd.DataFrame(data[:len(polygons)])
+    return pd.DataFrame(data[: len(polygons)])

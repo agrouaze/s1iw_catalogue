@@ -72,16 +72,16 @@ except ImportError:
 class ECMWFExtractor:
     """
     Extract ECMWF 10m wind data with numpy array access.
-    
+
     Handles two distinct archives:
     - Primary: 0.1°, hourly data
     - Fallback: 0.125°, 3-hourly data
     """
-    
+
     def __init__(self, config_path: str | None = None) -> None:
         """
         Initialize the ECMWF extractor.
-        
+
         Args:
             config_path: Path to the configuration file
         """
@@ -399,9 +399,7 @@ class ECMWFExtractor:
             raise ValueError("No geometry column found")
         return geom_col
 
-    def _resolve_paths(
-        self, catalogue_df: pd.DataFrame, time_col: str
-    ) -> pd.DataFrame:
+    def _resolve_paths(self, catalogue_df: pd.DataFrame, time_col: str) -> pd.DataFrame:
         """Resolve file paths for each row."""
         df_with_info = catalogue_df.copy()
 
@@ -485,7 +483,9 @@ class ECMWFExtractor:
 
         # Resolve file paths for each row
         if verbose:
-            logger.info("🌬️ Resolving ECMWF paths for %d products...", len(catalogue_df))
+            logger.info(
+                "🌬️ Resolving ECMWF paths for %d products...", len(catalogue_df)
+            )
         df_with_info = self._resolve_paths(catalogue_df, time_col)
 
         # Group by file path for efficient batch loading
@@ -516,8 +516,12 @@ class ECMWFExtractor:
                     catalogue_df.at[idx, col] = val
 
         if verbose:
-            logger.info("🏁 ECMWF extraction total time: %.3fs", time.time() - total_start)
-            logger.info("   Cache: hits=%d, misses=%d", self._cache_hits, self._cache_misses)
+            logger.info(
+                "🏁 ECMWF extraction total time: %.3fs", time.time() - total_start
+            )
+            logger.info(
+                "   Cache: hits=%d, misses=%d", self._cache_hits, self._cache_misses
+            )
 
         if is_polars:
             return pl.from_pandas(catalogue_df)

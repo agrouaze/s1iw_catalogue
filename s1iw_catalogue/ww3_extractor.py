@@ -3,12 +3,13 @@ WW3 Wave Data Extractor for Sentinel-1 MER products.
 Optimized: Load WW3 variables into memory once, then access as numpy arrays.
 """
 
+from typing import Any, Dict, List, Optional, Tuple, Union
+
 import logging
 import os
 import time
 import warnings
 from functools import wraps
-from typing import Any, Dict, List, Optional, Tuple, Union
 
 import numpy as np
 import pandas as pd
@@ -26,6 +27,7 @@ logger = logging.getLogger(__name__)
 
 def timing_decorator(func):
     """Decorator to log execution time of functions."""
+
     @wraps(func)
     def wrapper(*args, **kwargs):
         start_time = time.time()
@@ -34,6 +36,7 @@ def timing_decorator(func):
         if elapsed > 0.01:
             logger.debug("⏱️ %s took %.3fs", func.__name__, elapsed)
         return result
+
     return wrapper
 
 
@@ -63,7 +66,7 @@ except ImportError:
 class WW3Extractor:
     """Extract WW3 wave data with numpy array access."""
 
-    def __init__(self, config_path: Optional[str] = None):
+    def __init__(self, config_path: str | None = None):
         self.config = load_config(config_path)
         ww3_config = self.config.get("ww3", {})
 
@@ -89,11 +92,11 @@ class WW3Extractor:
         self.default_n_jobs = ww3_config.get("default_n_jobs", 6)
 
         # Cache: store loaded numpy arrays directly
-        self._cache: Dict[str, Dict[str, Any]] = {}
+        self._cache: dict[str, dict[str, Any]] = {}
         self._cache_hits = 0
         self._cache_misses = 0
 
-        self._diagnostics: Dict[str, Any] = {
+        self._diagnostics: dict[str, Any] = {
             "total_products": 0,
             "valid_geometries": 0,
             "invalid_geometries": 0,
@@ -114,7 +117,7 @@ class WW3Extractor:
         return min(ww3_hours, key=lambda x: abs(x - hour))
 
     @timing_decorator
-    def get_ww3_filename(self, datetime_obj: pd.Timestamp) -> Tuple[str, str, int]:
+    def get_ww3_filename(self, datetime_obj: pd.Timestamp) -> tuple[str, str, int]:
         """Get the WW3 filename for a given datetime."""
         rounded_hour = datetime_obj.round("h")
         if rounded_hour.hour == 23:
@@ -131,7 +134,9 @@ class WW3Extractor:
         return primary, fallback, year
 
     @timing_decorator
-    def get_file_path(self, year: int, primary_file: str, fallback_file: str) -> Optional[str]:
+    def get_file_path(
+        self, year: int, primary_file: str, fallback_file: str
+    ) -> str | None:
         """Get the file path for a WW3 file (primary or fallback)."""
         primary_path = os.path.join(
             self.primary_root, str(year), self.field_nc_subdir, primary_file
@@ -162,7 +167,7 @@ class WW3Extractor:
                 pass
         return None
 
-    def _get_centroid_from_geometry(self, row, geom_col: str) -> Tuple[float, float]:
+    def _get_centroid_from_geometry(self, row, geom_col: str) -> tuple[float, float]:
         """Extract centroid (lon, lat) from a geometry column."""
         geom = row[geom_col]
         if geom is None:
@@ -176,7 +181,7 @@ class WW3Extractor:
         return np.nan, np.nan
 
     @timing_decorator
-    def _load_ww3_data_with_times(self, filepath: str) -> Optional[Dict[str, Any]]:
+    def _load_ww3_data_with_times(self, filepath: str) -> dict[str, Any] | None:
         """
         Load WW3 data for ALL times into memory as numpy arrays.
         We'll store the full 3D array and select the right time for each product.
@@ -187,7 +192,9 @@ class WW3Extractor:
 
         self._cache_misses += 1
 
-        logger.debug("  Loading %s ALL times into memory...", os.path.basename(filepath))
+        logger.debug(
+            "  Loading %s ALL times into memory...", os.path.basename(filepath)
+        )
 
         try:
             # Open dataset
@@ -241,12 +248,12 @@ class WW3Extractor:
     @timing_decorator
     def _extract_values_batch(
         self,
-        cache_entry: Dict[str, Any],
-        indices: List[int],
+        cache_entry: dict[str, Any],
+        indices: list[int],
         df_with_info: pd.DataFrame,
         geom_col: str,
         time_col: str = "start date SAFE",
-    ) -> Dict[int, Dict[str, float]]:
+    ) -> dict[int, dict[str, float]]:
         """
         Extract values using numpy array access with correct time for each product.
         """
@@ -290,7 +297,12 @@ class WW3Extractor:
             if len(self._diagnostics["sample_coords"]) < 5:
                 safe_name = row.get("SAFE SLC", "unknown")[:40]
                 self._diagnostics["sample_coords"].append(
-                    (lon, lat, product_time if 'product_time' in locals() else None, safe_name)
+                    (
+                        lon,
+                        lat,
+                        product_time if "product_time" in locals() else None,
+                        safe_name,
+                    )
                 )
 
         if not valid_indices:
@@ -340,19 +352,19 @@ class WW3Extractor:
         d = self._diagnostics
         logger.info("=" * 60)
         logger.info("📊 EXTRACTION DIAGNOSTICS")
-        logger.info("   Total products: %d", d['total_products'])
-        logger.info("   Valid geometries: %d", d['valid_geometries'])
-        logger.info("   Invalid geometries: %d", d['invalid_geometries'])
-        logger.info("   Successful extractions: %d", d['successful_extractions'])
-        logger.info("   Failed extractions: %d", d['failed_extractions'])
+        logger.info("   Total products: %d", d["total_products"])
+        logger.info("   Valid geometries: %d", d["valid_geometries"])
+        logger.info("   Invalid geometries: %d", d["invalid_geometries"])
+        logger.info("   Successful extractions: %d", d["successful_extractions"])
+        logger.info("   Failed extractions: %d", d["failed_extractions"])
         if d["ww3_grid_bounds"]:
             b = d["ww3_grid_bounds"]
             logger.info(
                 "   WW3 grid bounds: Lon [%.1f, %.1f] Lat [%.1f, %.1f]",
-                b['lon_min'],
-                b['lon_max'],
-                b['lat_min'],
-                b['lat_max'],
+                b["lon_min"],
+                b["lon_max"],
+                b["lat_min"],
+                b["lat_max"],
             )
         if d["sample_coords"]:
             logger.info("   Sample coordinates (lon, lat, time, SAFE):")
@@ -374,10 +386,10 @@ class WW3Extractor:
     @timing_decorator
     def extract_batch(
         self,
-        catalogue_df: Union[pd.DataFrame, pl.DataFrame],
-        n_jobs: Optional[int] = None,
+        catalogue_df: pd.DataFrame | pl.DataFrame,
+        n_jobs: int | None = None,
         verbose: bool = True,
-    ) -> Union[pd.DataFrame, pl.DataFrame]:
+    ) -> pd.DataFrame | pl.DataFrame:
         """
         Extract WW3 data for a catalogue DataFrame.
 
@@ -541,11 +553,11 @@ class WW3Extractor:
 
 
 def add_ww3_to_catalogue(
-    catalogue_df: Union[pd.DataFrame, pl.DataFrame],
-    config_path: Optional[str] = None,
+    catalogue_df: pd.DataFrame | pl.DataFrame,
+    config_path: str | None = None,
     n_jobs: int = 6,
     verbose: bool = True,
-) -> Union[pd.DataFrame, pl.DataFrame]:
+) -> pd.DataFrame | pl.DataFrame:
     """
     Convenience function to add WW3 wave data to a catalogue.
 
