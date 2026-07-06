@@ -1,18 +1,20 @@
 """Browse API routes for filtering and exploring catalogue content."""
 
 from typing import Any, Dict, List, Optional
+
 import io
 import json
 import logging
 import traceback
 
+import numpy as np
 import polars as pl
 import shapely
 from fastapi import APIRouter, HTTPException, Response
+from scipy.stats import gaussian_kde
 from shapely import wkt
 from shapely.geometry import Point, mapping, shape
-import numpy as np
-from scipy.stats import gaussian_kde
+
 from s1iw_catalogue.web.models import FilterRequest, HeatmapRequest, MapRequest
 from s1iw_catalogue.web.utils.data_loader import catalogue_manager
 
@@ -161,19 +163,23 @@ async def export_catalogue(request: FilterRequest) -> Response:
     df = apply_filters(catalogue_manager.df, request)
 
     if df.height == 0:
-        raise HTTPException(status_code=404, detail="No data found for the selected filters")
+        raise HTTPException(
+            status_code=404, detail="No data found for the selected filters"
+        )
 
     if df.height > MAX_EXPORT_ROWS:
         raise HTTPException(
             status_code=413,
-            detail=f"Too many rows ({df.height}). Please refine your filters. Maximum allowed: {MAX_EXPORT_ROWS}"
+            detail=f"Too many rows ({df.height}). Please refine your filters. Maximum allowed: {MAX_EXPORT_ROWS}",
         )
 
     # Use requested columns or default to all
     if request.columns and len(request.columns) > 0:
         selected_cols = [c for c in request.columns if c in df.columns]
         if not selected_cols:
-            raise HTTPException(status_code=400, detail="No valid columns selected for export")
+            raise HTTPException(
+                status_code=400, detail="No valid columns selected for export"
+            )
         df = df.select(selected_cols)
     else:
         # Default: all columns except large geometry columns (optional)
@@ -184,19 +190,15 @@ async def export_catalogue(request: FilterRequest) -> Response:
     # to avoid list (imbricated list) columns in CSV, we can join them into a string
     list_cols = [c for c in df.columns if df[c].dtype == pl.List(pl.Utf8)]
     for col in list_cols:
-        df = df.with_columns(
-            pl.col(col).list.join(", ").alias(col)
-        )
+        df = df.with_columns(pl.col(col).list.join(", ").alias(col))
     # Convert Polars DataFrame to CSV
     csv_data = df.write_csv()
-    csv_bytes = csv_data.encode('utf-8')
+    csv_bytes = csv_data.encode("utf-8")
 
     return Response(
         content=csv_bytes,
         media_type="text/csv",
-        headers={
-            "Content-Disposition": "attachment; filename=catalogue_export.csv"
-        }
+        headers={"Content-Disposition": "attachment; filename=catalogue_export.csv"},
     )
 
 
@@ -241,8 +243,14 @@ async def get_map_data(request: MapRequest) -> dict[str, Any]:
                     "dataset": row.get("datasets"),
                     "polarization": row.get("polarization"),
                     "satellite": row.get("unit"),
-                    "start_date": str(row.get("start date SAFE")) if row.get("start date SAFE") else None,
-                    "horodating": str(row.get("horodating")) if row.get("horodating") else None,
+                    "start_date": (
+                        str(row.get("start date SAFE"))
+                        if row.get("start date SAFE")
+                        else None
+                    ),
+                    "horodating": (
+                        str(row.get("horodating")) if row.get("horodating") else None
+                    ),
                 },
             }
             features.append(feature)
@@ -267,9 +275,7 @@ async def get_hs_tp_heatmap(request: HeatmapRequest) -> dict[str, Any]:
 
     df = apply_filters(catalogue_manager.df, request.filter)
 
-    hs_tp_df = df.filter(
-        pl.col("Hs WW3").is_finite() & pl.col("Tp WW3").is_finite()
-    )
+    hs_tp_df = df.filter(pl.col("Hs WW3").is_finite() & pl.col("Tp WW3").is_finite())
 
     if hs_tp_df.height == 0:
         return {
@@ -324,11 +330,21 @@ async def get_wind_heatmap(request: HeatmapRequest) -> dict[str, Any]:
             "message": "No valid wind data available for the selected filters",
         }
 
-    wind_df = wind_df.with_columns([
-        ((pl.col("U10 ecmwf")**2 + pl.col("V10 ecmwf")**2).sqrt()).alias("wind_speed"),
-        ((180 + (180 / np.pi) * pl.arctan2(pl.col("U10 ecmwf"), pl.col("V10 ecmwf"))) % 360)
-        .alias("wind_direction")
-    ])
+    wind_df = wind_df.with_columns(
+        [
+            ((pl.col("U10 ecmwf") ** 2 + pl.col("V10 ecmwf") ** 2).sqrt()).alias(
+                "wind_speed"
+            ),
+            (
+                (
+                    180
+                    + (180 / np.pi)
+                    * pl.arctan2(pl.col("U10 ecmwf"), pl.col("V10 ecmwf"))
+                )
+                % 360
+            ).alias("wind_direction"),
+        ]
+    )
 
     directions = wind_df["wind_direction"].to_numpy()
     speeds = wind_df["wind_speed"].to_numpy()
@@ -395,10 +411,7 @@ async def get_daily_counts(request: FilterRequest) -> dict[str, Any]:
     counts = exploded.group_by(["date", "datasets"]).agg(pl.len())
 
     pivot = counts.pivot(
-        index="date",
-        columns="datasets",
-        values="len",
-        aggregate_function="sum"
+        index="date", columns="datasets", values="len", aggregate_function="sum"
     )
     pivot = pivot.fill_null(0)
 
@@ -408,7 +421,9 @@ async def get_daily_counts(request: FilterRequest) -> dict[str, Any]:
 
     sorted_indices = sorted(range(len(dates)), key=lambda i: dates[i])
     dates_sorted = [dates[i] for i in sorted_indices]
-    series_sorted = {ds: [series[ds][i] for i in sorted_indices] for ds in dataset_names}
+    series_sorted = {
+        ds: [series[ds][i] for i in sorted_indices] for ds in dataset_names
+    }
 
     return {
         "dates": dates_sorted,
@@ -428,18 +443,13 @@ async def get_monthly_counts(request: FilterRequest) -> dict[str, Any]:
     if "start date SAFE" not in df.columns or "datasets" not in df.columns:
         return {"error": "Missing required columns"}
 
-    df = df.with_columns(
-        pl.col("start date SAFE").dt.truncate("1mo").alias("month")
-    )
+    df = df.with_columns(pl.col("start date SAFE").dt.truncate("1mo").alias("month"))
 
     exploded = df.explode("datasets")
     counts = exploded.group_by(["month", "datasets"]).agg(pl.len())
 
     pivot = counts.pivot(
-        index="month",
-        columns="datasets",
-        values="len",
-        aggregate_function="sum"
+        index="month", columns="datasets", values="len", aggregate_function="sum"
     )
     pivot = pivot.fill_null(0)
 
@@ -449,7 +459,9 @@ async def get_monthly_counts(request: FilterRequest) -> dict[str, Any]:
 
     sorted_indices = sorted(range(len(months)), key=lambda i: months[i])
     months_sorted = [months[i] for i in sorted_indices]
-    series_sorted = {ds: [series[ds][i] for i in sorted_indices] for ds in dataset_names}
+    series_sorted = {
+        ds: [series[ds][i] for i in sorted_indices] for ds in dataset_names
+    }
 
     month_labels = [m.strftime("%Y-%m") for m in months_sorted]
 
@@ -472,7 +484,11 @@ async def get_datasets_metadata() -> dict[str, Any]:
         "has_datasets_col": "datasets" in df.columns,
         "dtype": str(df["datasets"].dtype) if "datasets" in df.columns else "absent",
         "sample": df["datasets"].head(2).to_list() if "datasets" in df.columns else [],
-        "non_empty_rows": df.filter(pl.col("datasets").is_not_null()).height if "datasets" in df.columns else 0,
+        "non_empty_rows": (
+            df.filter(pl.col("datasets").is_not_null()).height
+            if "datasets" in df.columns
+            else 0
+        ),
         "metadata_keys": list(metadata.keys()),
     }
 

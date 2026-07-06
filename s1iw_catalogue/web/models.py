@@ -1,7 +1,8 @@
 """Pydantic models for web API request/response validation."""
 
-from datetime import datetime
 from typing import Any, Dict, List, Optional
+
+from datetime import datetime
 
 from pydantic import BaseModel, Field
 
@@ -24,7 +25,9 @@ class FilterRequest(BaseModel):
     has_ocn: bool | None = Field(None, description="Only products with OCN presence")
     has_l1b: bool | None = Field(None, description="Only products with L1B presence")
     has_l1c: bool | None = Field(None, description="Only products with L1C presence")
-    columns: list[str] | None = Field(None, description="Columns to export (for CSV export)")
+    columns: list[str] | None = Field(
+        None, description="Columns to export (for CSV export)"
+    )
     limit: int = Field(100, ge=1, le=10000, description="Max number of results")
     offset: int = Field(0, ge=0, description="Pagination offset")
 
@@ -58,7 +61,7 @@ class DatasetCompletenessResponse(BaseModel):
 
 class GlobalStatsResponse(BaseModel):
     """Response model for global statistics."""
-    
+
     total_count: int
     product_type_counts: dict[str, int]
     product_type_percentages: dict[str, float]
@@ -69,5 +72,7 @@ class GlobalStatsResponse(BaseModel):
     polarization_counts: dict[str, int]
     dataset_counts: dict[str, int]
     latest_acquisition: tuple[str, str]  # (safe_name, iso_datetime)
-    latest_horodating: tuple[str, str]   # (safe_name, iso_datetime)
-    catalogue_last_modified: str | None = Field(None, description="Last modification time of the catalogue file")
+    latest_horodating: tuple[str, str]  # (safe_name, iso_datetime)
+    catalogue_last_modified: str | None = Field(
+        None, description="Last modification time of the catalogue file"
+    )

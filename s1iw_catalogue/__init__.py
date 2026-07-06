@@ -5,6 +5,7 @@ s1iw_catalogue – Exhaustive catalogue of Sentinel-1 IW SAFE products for Ifrem
 from __future__ import annotations
 
 from ._version import __version__, version, version_tuple
+
 # ✅ Kept: stats.py is copied in Docker and needed by the web app
 from .stats import CatalogueStats
 

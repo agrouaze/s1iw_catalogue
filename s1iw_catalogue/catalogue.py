@@ -50,7 +50,9 @@ class S1IWCatalogue:
         if isinstance(config, (str, Path)):
             self._config = load_config(config_path=config)
         else:
-            self._config = load_config(config_path=self._config_path) if config is None else config
+            self._config = (
+                load_config(config_path=self._config_path) if config is None else config
+            )
 
         self._updater = CatalogueUpdater(config=self._config, config_path=self._config_path)  # type: ignore[arg-type]
 
@@ -257,27 +259,31 @@ class S1IWCatalogue:
         Return dataset metadata (description, category, type) from the config file.
         """
         reference_listings = self._config.get("paths", {}).get("reference_listings", {})
-        
+
         # Debug logging
         logger.debug(f"reference_listings keys: {list(reference_listings.keys())}")
-        
+
         metadata = {}
         for dataset_name, dataset_info in reference_listings.items():
             logger.debug(f"Processing '{dataset_name}' -> type: {type(dataset_info)}")
-            
+
             if not isinstance(dataset_info, dict):
                 logger.debug(f"Skipping '{dataset_name}' - not a dict")
                 continue
 
             if "path" in dataset_info:
-                logger.debug(f"Found dataset '{dataset_name}' with path: {dataset_info.get('path')}")
+                logger.debug(
+                    f"Found dataset '{dataset_name}' with path: {dataset_info.get('path')}"
+                )
                 metadata[dataset_name] = {
                     "description": dataset_info.get("description", ""),
                     "category": dataset_info.get("category", "undefined"),
                     "type": dataset_info.get("type", ""),
                 }
             else:
-                logger.debug(f"Skipping '{dataset_name}' - no 'path' key. Keys: {list(dataset_info.keys())}")
+                logger.debug(
+                    f"Skipping '{dataset_name}' - no 'path' key. Keys: {list(dataset_info.keys())}"
+                )
 
         logger.debug(f"Found {len(metadata)} datasets")
         return metadata

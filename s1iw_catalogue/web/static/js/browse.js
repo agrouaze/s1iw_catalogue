@@ -223,7 +223,7 @@ function updateResultsTable(filters, onTotalCount) {
     .then(data => {
         const rows = data.rows || [];
         const total = data.total || 0;
-        
+
         // Update total count via callback
         if (onTotalCount) {
             onTotalCount(total);
@@ -232,8 +232,8 @@ function updateResultsTable(filters, onTotalCount) {
         if (countDiv) {
             const start = filters.offset + 1;
             const end = Math.min(filters.offset + rows.length, total);
-            countDiv.textContent = total === 0 
-                ? 'No results found' 
+            countDiv.textContent = total === 0
+                ? 'No results found'
                 : `Showing ${start}-${end} of ${total} results`;
         }
 

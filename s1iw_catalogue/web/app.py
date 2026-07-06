@@ -16,7 +16,9 @@ from s1iw_catalogue.web.utils.data_loader import catalogue_manager
 logging.getLogger("s1iw_catalogue.catalogue").setLevel(logging.DEBUG)
 
 
-def create_app(catalogue_path: Path | None = None, config_path: Path | None = None) -> FastAPI:
+def create_app(
+    catalogue_path: Path | None = None, config_path: Path | None = None
+) -> FastAPI:
     """Factory to create the FastAPI app (avoids heavy module-level imports)."""
 
     @asynccontextmanager
@@ -28,26 +30,28 @@ def create_app(catalogue_path: Path | None = None, config_path: Path | None = No
 
             if config_path:
                 try:
-                    with open(config_path, 'r') as f:
+                    with open(config_path, "r") as f:
                         config_data = yaml.safe_load(f)
-                    
+
                     # ✅ Replicated logic from catalogue.py (no heavy imports!)
-                    reference_listings = config_data.get("paths", {}).get("reference_listings", {})
-                    
+                    reference_listings = config_data.get("paths", {}).get(
+                        "reference_listings", {}
+                    )
+
                     dataset_metadata = {}
                     for dataset_name, dataset_info in reference_listings.items():
                         if not isinstance(dataset_info, dict):
                             continue
-                        
+
                         if "path" in dataset_info:
                             dataset_metadata[dataset_name] = {
                                 "description": dataset_info.get("description", ""),
                                 "category": dataset_info.get("category", "undefined"),
                                 "type": dataset_info.get("type", ""),
                             }
-                    
+
                     catalogue_manager.set_dataset_metadata(dataset_metadata)
-                    
+
                     print(f"Loaded dataset metadata from: {config_path}")
                     print(f"  Datasets found: {list(dataset_metadata.keys())}")
                 except Exception as e:

@@ -258,6 +258,7 @@ def serve(
     # Set debug logging if requested
     if debug:
         import logging
+
         logging.getLogger("s1iw_catalogue").setLevel(logging.DEBUG)
         logging.getLogger("s1iw_catalogue.web").setLevel(logging.DEBUG)
         logging.getLogger("s1iw_catalogue.catalogue").setLevel(logging.DEBUG)

@@ -626,7 +626,9 @@ class TestLinkOcnToGrd:
     """Tests for _link_ocn_to_grd."""
 
     @patch.object(CatalogueUpdater, "_batch_cdse_match")
-    def test_link_ocn_to_grd_found(self, mock_batch: MagicMock, updater: CatalogueUpdater) -> None:
+    def test_link_ocn_to_grd_found(
+        self, mock_batch: MagicMock, updater: CatalogueUpdater
+    ) -> None:
         """Test successful OCN linking via batch match."""
         mock_batch.return_value = {"GRD1": "OCN1"}
         grd_name = "GRD1"
@@ -656,12 +658,14 @@ class TestLinkOcnToGrd:
         }
         df = pl.DataFrame(data, schema=SCHEMA)
         result = updater._link_ocn_to_grd(df)
-        
+
         assert result["SAFE OCN"][0] == "OCN1"
         mock_batch.assert_called_once_with([grd_name], "OCN_")
 
     @patch.object(CatalogueUpdater, "_batch_cdse_match")
-    def test_link_ocn_to_grd_not_found_marked(self, mock_batch: MagicMock, updater: CatalogueUpdater) -> None:
+    def test_link_ocn_to_grd_not_found_marked(
+        self, mock_batch: MagicMock, updater: CatalogueUpdater
+    ) -> None:
         """Test OCN marked as NOT_FOUND when CDSE returns empty mapping."""
         mock_batch.return_value = {}  # Simulate OCN not found
         grd_name = "GRD1"
@@ -691,12 +695,14 @@ class TestLinkOcnToGrd:
         }
         df = pl.DataFrame(data, schema=SCHEMA)
         result = updater._link_ocn_to_grd(df)
-        
+
         assert result["SAFE OCN"][0] == "NOT_FOUND"
         mock_batch.assert_called_once()
 
     @patch.object(CatalogueUpdater, "_batch_cdse_match")
-    def test_link_ocn_to_grd_already_linked(self, mock_batch: MagicMock, updater: CatalogueUpdater) -> None:
+    def test_link_ocn_to_grd_already_linked(
+        self, mock_batch: MagicMock, updater: CatalogueUpdater
+    ) -> None:
         """Test that GRD with an existing OCN is skipped."""
         mock_batch.return_value = {"SHOULD_NOT_BE_CALLED": "OCN1"}
         grd_name = "GRD1"
@@ -726,6 +732,6 @@ class TestLinkOcnToGrd:
         }
         df = pl.DataFrame(data, schema=SCHEMA)
         result = updater._link_ocn_to_grd(df)
-        
+
         assert result["SAFE OCN"][0] == "ALREADY_EXISTS"
         mock_batch.assert_not_called()
