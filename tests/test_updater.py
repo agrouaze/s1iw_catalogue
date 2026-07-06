@@ -34,11 +34,13 @@ def dummy_config():
 
 @pytest.fixture
 def updater(dummy_config):
+    """Return a CatalogueUpdater instance with dummy config."""
     return CatalogueUpdater(dummy_config)
 
 
 @pytest.fixture
 def sample_slc_listing(tmp_path):
+    """Return a temporary SLC listing file."""
     content = """
 S1A_IW_SLC__1SDV_20250101T000000_20250101T000027_000001_000001_0001.SAFE
 S1A_IW_SLC__1SDV_20250102T000000_20250102T000027_000002_000002_0002.SAFE
@@ -50,6 +52,7 @@ S1A_IW_SLC__1SDV_20250102T000000_20250102T000027_000002_000002_0002.SAFE
 
 @pytest.fixture
 def sample_grd_listing(tmp_path):
+    """Return a temporary GRD listing file."""
     content = """
 S1A_IW_GRDH_1SDV_20250101T000001_20250101T000028_000001_000001_0003.SAFE
 S1A_IW_GRDH_1SDV_20250102T000001_20250102T000028_000002_000002_0004.SAFE
@@ -61,6 +64,7 @@ S1A_IW_GRDH_1SDV_20250102T000001_20250102T000028_000002_000002_0004.SAFE
 
 @pytest.fixture
 def sample_catalogue_df():
+    """Return a sample catalogue DataFrame."""
     data = {
         "SAFE SLC": [
             "S1A_IW_SLC__1SDV_20250101T000000_20250101T000027_000001_000001_0001.SAFE"
@@ -96,6 +100,7 @@ class TestParseSafeName:
     """Tests for parse_safe_name static method."""
 
     def test_parse_valid_slc(self):
+        """Test parsing a valid SLC SAFE name."""
         name = (
             "S1A_IW_SLC__1SDV_20250101T000000_20250101T000027_000001_000001_0001.SAFE"
         )
@@ -111,6 +116,7 @@ class TestParseSafeName:
         assert result == expected
 
     def test_parse_valid_grd(self):
+        """Test parsing a valid GRD SAFE name."""
         name = (
             "S1A_IW_GRDH_1SDV_20250101T000001_20250101T000028_000001_000001_0003.SAFE"
         )
@@ -119,6 +125,7 @@ class TestParseSafeName:
         assert result["start_date"] == datetime.datetime(2025, 1, 1, 0, 0, 1)
 
     def test_parse_invalid_raises(self):
+        """Test parsing an invalid SAFE name raises ValueError."""
         with pytest.raises(ValueError, match="Unable to parse SAFE name"):
             CatalogueUpdater.parse_safe_name("invalid_name")
 
@@ -127,11 +134,12 @@ class TestReadListings:
     """Tests for reading listing files."""
 
     def test_read_one_listing_exists(self, tmp_path, updater):
+        """Test reading a single listing file that exists."""
         path = tmp_path / "listing.txt"
         path.write_text(
             "S1A_IW_SLC__1SDV_20250101T000000_20250101T000027_000001_000001_0001.SAFE\n"
         )
-        df = updater._read_one_listing(path)
+        df = updater._read_one_listing(path)  # pylint: disable=protected-access
         assert df.height == 1
         assert (
             df["safe_name"][0]
@@ -139,10 +147,14 @@ class TestReadListings:
         )
 
     def test_read_one_listing_not_exists(self, updater):
-        df = updater._read_one_listing(Path("/nonexistent"))
+        """Test reading a listing file that does not exist."""
+        df = updater._read_one_listing(
+            Path("/nonexistent")
+        )  # pylint: disable=protected-access
         assert df.height == 0
 
     def test_read_listings_single_file(self, tmp_path, updater):
+        """Test reading a single file via read_listings."""
         path = tmp_path / "listing.txt"
         path.write_text(
             "S1A_IW_SLC__1SDV_20250101T000000_20250101T000027_000001_000001_0001.SAFE\n"
@@ -151,6 +163,7 @@ class TestReadListings:
         assert df.height == 1
 
     def test_read_listings_directory(self, tmp_path, updater):
+        """Test reading all files in a directory."""
         dir_path = tmp_path / "listings"
         dir_path.mkdir()
         (dir_path / "a.txt").write_text(
@@ -167,6 +180,7 @@ class TestBuildFromListings:
     """Tests for build_from_listings."""
 
     def test_build_from_listings_single_slc(self, tmp_path, updater):
+        """Test building catalogue from a single SLC listing."""
         slc_path = tmp_path / "slc.txt"
         slc_path.write_text(
             "S1A_IW_SLC__1SDV_20250101T000000_20250101T000027_000001_000001_0001.SAFE\n"
@@ -176,7 +190,6 @@ class TestBuildFromListings:
         }
         df = updater.build_from_listings(listings)
         assert df.height == 1
-        assert df.shape[0] == 1
         assert (
             df["SAFE SLC"][0]
             == "S1A_IW_SLC__1SDV_20250101T000000_20250101T000027_000001_000001_0001.SAFE"
@@ -184,6 +197,7 @@ class TestBuildFromListings:
         assert df.select(pl.col("datasets")).row(0)[0] == ["test_slc"]
 
     def test_build_from_listings_mixed(self, tmp_path, updater):
+        """Test building catalogue from mixed SLC and GRD listings."""
         slc_path = tmp_path / "slc.txt"
         slc_path.write_text(
             "S1A_IW_SLC__1SDV_20250101T000000_20250101T000027_000001_000001_0001.SAFE\n"
@@ -204,6 +218,7 @@ class TestBuildFromListings:
         assert grd_rows.height == 1
 
     def test_build_from_listings_invalid_type_skipped(self, tmp_path, updater):
+        """Test that listings with invalid type are skipped."""
         path = tmp_path / "dummy.txt"
         path.write_text(
             "S1A_IW_SLC__1SDV_20250101T000000_20250101T000027_000001_000001_0001.SAFE\n"
@@ -217,6 +232,7 @@ class TestLocalLinkSlcGrd:
     """Tests for _local_link_slc_grd."""
 
     def test_local_link_with_matching(self, updater):
+        """Test local SLC-GRD linking with matching products."""
         slc_name = (
             "S1A_IW_SLC__1SDV_20250101T000000_20250101T000027_000001_000001_0001.SAFE"
         )
@@ -254,13 +270,14 @@ class TestLocalLinkSlcGrd:
             "unit": ["S1A", "S1A"],
         }
         df = pl.DataFrame(data, schema=SCHEMA)
-        result = updater._local_link_slc_grd(df)
+        result = updater._local_link_slc_grd(df)  # pylint: disable=protected-access
         linked = result.filter(
             pl.col("SAFE SLC").is_not_null() & pl.col("SAFE GRD").is_not_null()
         )
         assert linked.height == 2
 
     def test_local_link_no_match(self, updater):
+        """Test local SLC-GRD linking with no matching products."""
         grd_name = (
             "S1A_IW_GRDH_1SDV_20250101T000001_20250101T000028_000001_000001_0003.SAFE"
         )
@@ -289,7 +306,7 @@ class TestLocalLinkSlcGrd:
             "unit": ["S1A"],
         }
         df = pl.DataFrame(data, schema=SCHEMA)
-        result = updater._local_link_slc_grd(df)
+        result = updater._local_link_slc_grd(df)  # pylint: disable=protected-access
         linked = result.filter(
             pl.col("SAFE SLC").is_not_null() & pl.col("SAFE GRD").is_not_null()
         )
@@ -300,6 +317,7 @@ class TestMergeLinkedRows:
     """Tests for _merge_linked_rows."""
 
     def test_merge_simple(self, updater):
+        """Test merging two linked rows."""
         slc = "SLC1"
         grd = "GRD1"
         data = {
@@ -333,7 +351,7 @@ class TestMergeLinkedRows:
             "unit": ["S1A", "S1A"],
         }
         df = pl.DataFrame(data, schema=SCHEMA)
-        merged = updater._merge_linked_rows(df)
+        merged = updater._merge_linked_rows(df)  # pylint: disable=protected-access
         assert merged.height == 1
         datasets = merged["datasets"][0]
         assert sorted(datasets) == ["ds1", "ds2"]
@@ -345,6 +363,7 @@ class TestComputeCategoryAndConflicts:
     """Tests for _compute_category_and_conflicts."""
 
     def test_category_priority_simple(self, updater, tmp_path):
+        """Test category priority selection."""
         df = pl.DataFrame(
             {
                 "SAFE SLC": ["SLC1"],
@@ -376,10 +395,15 @@ class TestComputeCategoryAndConflicts:
             "train_ds": {"category": "train"},
             "val_ds": {"category": "val"},
         }
-        result = updater._compute_category_and_conflicts(df, metadata, tmp_path / "out")
+        result = (
+            updater._compute_category_and_conflicts(  # pylint: disable=protected-access
+                df, metadata, tmp_path / "out"
+            )
+        )
         assert result["category"][0] == "val"
 
     def test_category_priority_undefined(self, updater, tmp_path):
+        """Test category priority with undefined category."""
         df = pl.DataFrame(
             {
                 "SAFE SLC": ["SLC1"],
@@ -411,7 +435,11 @@ class TestComputeCategoryAndConflicts:
             "undefined_ds": {},
             "train_ds": {"category": "train"},
         }
-        result = updater._compute_category_and_conflicts(df, metadata, tmp_path / "out")
+        result = (
+            updater._compute_category_and_conflicts(  # pylint: disable=protected-access
+                df, metadata, tmp_path / "out"
+            )
+        )
         assert result["category"][0] == "train"
 
 
@@ -419,6 +447,7 @@ class TestMergeCatalogues:
     """Tests for merge_catalogues."""
 
     def test_merge_two_simple(self, tmp_path, updater):
+        """Test merging two catalogues."""
         df1 = pl.DataFrame(
             {
                 "SAFE SLC": ["SLC1", "SLC2"],
@@ -506,6 +535,7 @@ class TestUpdatePresenceColumns:
 
     @patch("s1ifr.get_path_from_base_safe.get_path_from_base_safe")
     def test_update_presence_columns_found(self, mock_get_path, updater):
+        """Test presence update when product is found."""
         mock_get_path.return_value = "/found/path"
         df = pl.DataFrame(
             {
@@ -534,11 +564,14 @@ class TestUpdatePresenceColumns:
             },
             schema=SCHEMA,
         )
-        result = updater._update_presence_columns(df)
+        result = updater._update_presence_columns(
+            df
+        )  # pylint: disable=protected-access
         assert result["PATH SLC"][0] == "/found/path"
 
     @patch("s1ifr.get_path_from_base_safe.get_path_from_base_safe")
     def test_update_presence_columns_not_found(self, mock_get_path, updater):
+        """Test presence update when product is not found."""
         mock_get_path.return_value = None
         df = pl.DataFrame(
             {
@@ -567,7 +600,9 @@ class TestUpdatePresenceColumns:
             },
             schema=SCHEMA,
         )
-        result = updater._update_presence_columns(df)
+        result = updater._update_presence_columns(
+            df
+        )  # pylint: disable=protected-access
         assert result["PATH SLC"][0] is None
 
 
@@ -576,6 +611,7 @@ class TestUpdateDerivedProducts:
 
     @patch("s1ifr.paths_safe_product_family.get_products_family")
     def test_update_derived_products(self, mock_get_family, updater):
+        """Test derived products update."""
         import pandas as pd
 
         mock_df = pd.DataFrame(
@@ -613,7 +649,9 @@ class TestUpdateDerivedProducts:
             },
             schema=SCHEMA,
         )
-        result = updater._update_derived_products(df)
+        result = updater._update_derived_products(
+            df
+        )  # pylint: disable=protected-access
         assert result["PATH L1B XSP A21"][0] == "/path/to/a21"
 
 
@@ -652,7 +690,7 @@ class TestLinkOcnToGrd:
             "unit": ["S1A"],
         }
         df = pl.DataFrame(data, schema=SCHEMA)
-        result = updater._link_ocn_to_grd(df)
+        result = updater._link_ocn_to_grd(df)  # pylint: disable=protected-access
 
         assert result["SAFE OCN"][0] == "OCN1"
         mock_batch.assert_called_once_with([grd_name], "OCN_")
@@ -689,7 +727,7 @@ class TestLinkOcnToGrd:
             "unit": ["S1A"],
         }
         df = pl.DataFrame(data, schema=SCHEMA)
-        result = updater._link_ocn_to_grd(df)
+        result = updater._link_ocn_to_grd(df)  # pylint: disable=protected-access
 
         assert result["SAFE OCN"][0] == "NOT_FOUND"
         mock_batch.assert_called_once()
@@ -726,7 +764,7 @@ class TestLinkOcnToGrd:
             "unit": ["S1A"],
         }
         df = pl.DataFrame(data, schema=SCHEMA)
-        result = updater._link_ocn_to_grd(df)
+        result = updater._link_ocn_to_grd(df)  # pylint: disable=protected-access
 
         assert result["SAFE OCN"][0] == "ALREADY_EXISTS"
         mock_batch.assert_not_called()
