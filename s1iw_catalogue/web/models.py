@@ -58,7 +58,7 @@ class DatasetCompletenessResponse(BaseModel):
 
 class GlobalStatsResponse(BaseModel):
     """Response model for global statistics."""
-
+    
     total_count: int
     product_type_counts: dict[str, int]
     product_type_percentages: dict[str, float]
@@ -69,4 +69,5 @@ class GlobalStatsResponse(BaseModel):
     polarization_counts: dict[str, int]
     dataset_counts: dict[str, int]
     latest_acquisition: tuple[str, str]  # (safe_name, iso_datetime)
-    latest_horodating: tuple[str, str]  # (safe_name, iso_datetime)
+    latest_horodating: tuple[str, str]   # (safe_name, iso_datetime)
+    catalogue_last_modified: str | None = Field(None, description="Last modification time of the catalogue file")

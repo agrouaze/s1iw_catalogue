@@ -5,7 +5,7 @@
 {% block content %}
 <div class="page-header">
     <h1>📊 Catalogue Dashboard</h1>
-    <p class="subtitle">Overview of the Sentinel-1 IW catalogue</p>
+    <p class="subtitle">Overview Ifremer Sentinel-1 IW catalogue</p>
 </div>
 
 <!-- Stats Cards -->
@@ -14,6 +14,11 @@
     <div class="stat-card accent"><div class="stat-number" id="slc-count">...</div><div class="stat-label">SLC products</div></div>
     <div class="stat-card warning"><div class="stat-number" id="grd-count">...</div><div class="stat-label">GRD products</div></div>
     <div class="stat-card purple"><div class="stat-number" id="ocn-count">...</div><div class="stat-label">OCN products</div></div>
+</div>
+
+<!-- Catalogue last modified info -->
+<div class="catalogue-info" id="catalogue-info">
+    <p class="catalogue-meta">🔄 Last updated: <span id="catalogue-last-modified">Loading...</span></p>
 </div>
 
 <!-- Dataset Completeness -->
@@ -87,7 +92,7 @@
 
     // Load all data after metadata is loaded
     function loadAllData() {
-        // Load global stats
+        // Load global stats (including catalogue last modified)
         fetch('/api/stats/global')
             .then(res => res.json())
             .then(data => {
@@ -95,8 +100,20 @@
                 document.getElementById('slc-count').textContent = data.product_type_counts.SLC || 0;
                 document.getElementById('grd-count').textContent = data.product_type_counts.GRD || 0;
                 document.getElementById('ocn-count').textContent = data.product_type_counts.OCN || 0;
+
+                // Display catalogue last modified
+                const mtimeEl = document.getElementById('catalogue-last-modified');
+                if (data.catalogue_last_modified) {
+                    const date = new Date(data.catalogue_last_modified);
+                    mtimeEl.textContent = date.toLocaleString('fr-FR');
+                } else {
+                    mtimeEl.textContent = 'Unknown';
+                }
             })
-            .catch(error => console.error('Error loading global stats:', error));
+            .catch(error => {
+                console.error('Error loading global stats:', error);
+                document.getElementById('catalogue-last-modified').textContent = 'Error loading';
+            });
 
         // Load dataset completeness table
         fetch('/api/stats/datasets')
