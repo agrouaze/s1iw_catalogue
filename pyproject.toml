@@ -70,6 +70,7 @@ dev = [
   "coverage-badge",
   "pytest-html",
   "pytest-cov",
+  "pytest-asyncio",
   "s1iw_catalogue[catalogue,web]",  # Dev gets everything
 ]
 
