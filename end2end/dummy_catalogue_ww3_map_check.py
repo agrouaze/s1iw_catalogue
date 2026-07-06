@@ -6,6 +6,8 @@ Creates a dummy catalogue with fake SAR polygons in the Iroise Sea,
 extracts WW3 values for each polygon, and plots the results on a map.
 """
 
+from typing import Any, Dict, List, Optional, Tuple
+
 import argparse
 import logging
 import os
@@ -15,30 +17,25 @@ from datetime import datetime, timedelta
 
 import cartopy.crs as ccrs
 import cartopy.feature as cfeature
-import geopandas as gpd
-import matplotlib.colors as colors
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
-import xarray as xr
 from cartopy.mpl.gridliner import LATITUDE_FORMATTER, LONGITUDE_FORMATTER
 from shapely import wkt
-from shapely.geometry import Polygon, box
-from tqdm import tqdm
+from shapely.geometry import box
 
 warnings.filterwarnings("ignore")
 
 # Add parent directory to path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from s1iw_catalogue.schema import WW3_COLUMNS
 from s1iw_catalogue.ww3_extractor import add_ww3_to_catalogue
 
 # Set up logger
 logger = logging.getLogger(__name__)
 
 
-def setup_logging(log_level: str = "INFO"):
+def setup_logging(log_level: str = "INFO") -> logging.Logger:
     """Set up logging with the specified level."""
     level_map = {
         "DEBUG": logging.DEBUG,
@@ -62,8 +59,8 @@ def create_dummy_catalogue(
     lon_max: float = -3.0,
     lat_min: float = 47.0,
     lat_max: float = 49.0,
-    step_deg: float = 0.45,  # ~50km at this latitude
-    polygon_size_deg: float = 0.18,  # ~20km at this latitude
+    step_deg: float = 0.45,
+    polygon_size_deg: float = 0.18,
     date_start: str = "2023-01-15 12:00:00",
     n_products_per_location: int = 1,
 ) -> pd.DataFrame:
@@ -75,7 +72,7 @@ def create_dummy_catalogue(
         step_deg: Spacing between grid points in degrees (~50km)
         polygon_size_deg: Size of each polygon in degrees (~20km)
         date_start: Start date for the products
-        n_products_per_location: Number of products per location (with different times)
+        n_products_per_location: Number of products per location
 
     Returns:
         DataFrame with dummy catalogue
@@ -83,11 +80,17 @@ def create_dummy_catalogue(
     logger.info("=" * 60)
     logger.info("📍 Creating dummy catalogue for Iroise Sea")
     logger.info(
-        f"   Grid: lon [{lon_min:.2f}, {lon_max:.2f}], lat [{lat_min:.2f}, {lat_max:.2f}]"
+        "   Grid: lon [%.2f, %.2f], lat [%.2f, %.2f]",
+        lon_min,
+        lon_max,
+        lat_min,
+        lat_max,
     )
-    logger.info(f"   Step: {step_deg:.3f}° (~{step_deg * 111:.1f}km)")
+    logger.info("   Step: %.3f° (~%.1fkm)", step_deg, step_deg * 111)
     logger.info(
-        f"   Polygon size: {polygon_size_deg:.3f}° (~{polygon_size_deg * 111:.1f}km)"
+        "   Polygon size: %.3f° (~%.1fkm)",
+        polygon_size_deg,
+        polygon_size_deg * 111,
     )
     logger.info("=" * 60)
 
@@ -100,8 +103,8 @@ def create_dummy_catalogue(
 
     start_date = pd.to_datetime(date_start)
 
-    for i, lon in enumerate(lons):
-        for j, lat in enumerate(lats):
+    for lon in lons:
+        for lat in lats:
             # Create a square polygon around the point
             half_size = polygon_size_deg / 2
             polygon = box(
@@ -148,12 +151,14 @@ def create_dummy_catalogue(
     # Add geometry column as shapely objects for convenience
     df["geometry"] = df["polygon SLC"].apply(wkt.loads)
 
-    logger.info(f"✅ Created {len(df)} dummy products")
+    logger.info("✅ Created %d dummy products", len(df))
     logger.info(
-        f"   Grid: {len(lons)} x {len(lats)} = {len(lons) * len(lats)} locations"
+        "   Grid: %d x %d = %d locations", len(lons), len(lats), len(lons) * len(lats)
     )
     logger.info(
-        f"   Time range: {df['start date SAFE'].min()} to {df['start date SAFE'].max()}"
+        "   Time range: %s to %s",
+        df["start date SAFE"].min(),
+        df["start date SAFE"].max(),
     )
 
     return df
@@ -161,7 +166,7 @@ def create_dummy_catalogue(
 
 def extract_ww3_for_catalogue(
     catalogue_df: pd.DataFrame,
-    config_path: str = None,
+    config_path: str | None = None,
     n_jobs: int = 4,
     verbose: bool = True,
 ) -> pd.DataFrame:
@@ -186,41 +191,22 @@ def extract_ww3_for_catalogue(
     valid_tp = result_df["Tp WW3"].notna().sum()
     total = len(result_df)
 
-    logger.info(f"✅ WW3 extraction complete:")
-    logger.info(f"   Hs WW3: {valid_hs}/{total} valid")
-    logger.info(f"   Tp WW3: {valid_tp}/{total} valid")
+    logger.info("✅ WW3 extraction complete:")
+    logger.info("   Hs WW3: %d/%d valid", valid_hs, total)
+    logger.info("   Tp WW3: %d/%d valid", valid_tp, total)
 
     return result_df
 
 
-def plot_ww3_map(
-    catalogue_df: pd.DataFrame,
-    output_dir: str,
-    var_name: str = "Hs WW3",
-    title: str = None,
-    vmin: float = None,
-    vmax: float = None,
-    cmap: str = "viridis",
-    log_level: str = "INFO",
-) -> None:
+def _get_plot_data(
+    catalogue_df: pd.DataFrame, var_name: str
+) -> tuple[np.ndarray, np.ndarray]:
     """
-    Plot WW3 variables on a map using Cartopy.
+    Extract centroids and values for plotting.
 
-    Args:
-        catalogue_df: DataFrame with WW3 values and polygons
-        output_dir: Output directory for PNG files
-        var_name: Variable to plot ('Hs WW3' or 'Tp WW3')
-        title: Custom title for the plot
-        vmin, vmax: Colorbar limits
-        cmap: Colormap name
-        log_level: Logging level
+    Returns:
+        Tuple of (centroids_array, values_array)
     """
-    logger = setup_logging(log_level)
-
-    # Create output directory
-    os.makedirs(output_dir, exist_ok=True)
-
-    # Get centroids and values
     centroids = []
     values = []
     valid_products = catalogue_df[catalogue_df[var_name].notna()]
@@ -232,36 +218,13 @@ def plot_ww3_map(
             centroids.append((centroid.x, centroid.y))
             values.append(row[var_name])
         except Exception as e:
-            logger.debug(f"Error processing product: {e}")
+            logger.debug("Error processing product: %s", e)
 
-    if not centroids:
-        logger.error(f"No valid data to plot for {var_name}")
-        return
+    return np.array(centroids), np.array(values)
 
-    centroids = np.array(centroids)
-    values = np.array(values)
 
-    # Set colorbar limits if not provided
-    if vmin is None:
-        vmin = values.min() * 0.9 if len(values) > 0 else 0
-    if vmax is None:
-        vmax = values.max() * 1.1 if len(values) > 0 else 10
-
-    logger.info(
-        f"📊 Plotting {var_name}: {len(values)} points, range [{vmin:.2f}, {vmax:.2f}]"
-    )
-
-    # Create figure with Cartopy projection
-    fig, ax = plt.subplots(
-        figsize=(12, 10), subplot_kw={"projection": ccrs.PlateCarree()}
-    )
-
-    # Set map extent
-    lon_min, lon_max = centroids[:, 0].min() - 0.5, centroids[:, 0].max() + 0.5
-    lat_min, lat_max = centroids[:, 1].min() - 0.5, centroids[:, 1].max() + 0.5
-    ax.set_extent([lon_min, lon_max, lat_min, lat_max], crs=ccrs.PlateCarree())
-
-    # Add map features
+def _add_map_features(ax, draw_labels: bool = True) -> None:
+    """Add standard map features to a Cartopy axis."""
     ax.add_feature(cfeature.LAND, facecolor="lightgray", edgecolor="black", alpha=0.7)
     ax.add_feature(cfeature.OCEAN, facecolor="lightblue", alpha=0.3)
     ax.add_feature(cfeature.COASTLINE, linewidth=0.8)
@@ -269,17 +232,26 @@ def plot_ww3_map(
     ax.add_feature(cfeature.LAKES, facecolor="lightblue", alpha=0.5)
     ax.add_feature(cfeature.RIVERS, linewidth=0.5)
 
-    # Add gridlines
-    gl = ax.gridlines(
-        draw_labels=True, linewidth=0.5, color="gray", alpha=0.5, linestyle="--"
-    )
-    gl.top_labels = False
-    gl.right_labels = False
-    gl.xformatter = LONGITUDE_FORMATTER
-    gl.yformatter = LATITUDE_FORMATTER
+    if draw_labels:
+        gl = ax.gridlines(
+            draw_labels=True, linewidth=0.5, color="gray", alpha=0.5, linestyle="--"
+        )
+        gl.top_labels = False
+        gl.right_labels = False
+        gl.xformatter = LONGITUDE_FORMATTER
+        gl.yformatter = LATITUDE_FORMATTER
 
-    # Create scatter plot
-    scatter = ax.scatter(
+
+def _create_scatter_plot(
+    ax,
+    centroids: np.ndarray,
+    values: np.ndarray,
+    vmin: float,
+    vmax: float,
+    cmap: str,
+) -> Any:
+    """Create a scatter plot on a Cartopy axis."""
+    return ax.scatter(
         centroids[:, 0],
         centroids[:, 1],
         c=values,
@@ -294,17 +266,70 @@ def plot_ww3_map(
         zorder=10,
     )
 
+
+def plot_ww3_map(
+    catalogue_df: pd.DataFrame,
+    output_dir: str,
+    var_name: str = "Hs WW3",
+    title: str | None = None,
+    vmin: float | None = None,
+    vmax: float | None = None,
+    cmap: str = "viridis",
+    log_level: str = "INFO",
+) -> None:
+    """
+    Plot WW3 variables on a map using Cartopy.
+    """
+    _ = setup_logging(log_level)  # Reuse existing logger
+
+    # Create output directory
+    os.makedirs(output_dir, exist_ok=True)
+
+    # Get plot data
+    centroids, values = _get_plot_data(catalogue_df, var_name)
+
+    if len(centroids) == 0:
+        logger.error("No valid data to plot for %s", var_name)
+        return
+
+    # Set colorbar limits if not provided
+    if vmin is None:
+        vmin = values.min() * 0.9 if len(values) > 0 else 0
+    if vmax is None:
+        vmax = values.max() * 1.1 if len(values) > 0 else 10
+
+    logger.info(
+        "📊 Plotting %s: %d points, range [%.2f, %.2f]",
+        var_name,
+        len(values),
+        vmin,
+        vmax,
+    )
+
+    # Create figure with Cartopy projection
+    fig, ax = plt.subplots(
+        figsize=(12, 10), subplot_kw={"projection": ccrs.PlateCarree()}
+    )
+
+    # Set map extent
+    lon_min, lon_max = centroids[:, 0].min() - 0.5, centroids[:, 0].max() + 0.5
+    lat_min, lat_max = centroids[:, 1].min() - 0.5, centroids[:, 1].max() + 0.5
+    ax.set_extent([lon_min, lon_max, lat_min, lat_max], crs=ccrs.PlateCarree())
+
+    # Add map features
+    _add_map_features(ax)
+
+    # Create scatter plot
+    scatter = _create_scatter_plot(ax, centroids, values, vmin, vmax, cmap)
+
     # Add colorbar
     cbar = fig.colorbar(scatter, ax=ax, orientation="vertical", pad=0.05)
 
     # Set colorbar label
-    if var_name == "Hs WW3":
-        cbar_label = "Significant Wave Height (m)"
-    elif var_name == "Tp WW3":
-        cbar_label = "Peak Period (s)"
-    else:
-        cbar_label = var_name
-
+    cbar_label = {
+        "Hs WW3": "Significant Wave Height (m)",
+        "Tp WW3": "Peak Period (s)",
+    }.get(var_name, var_name)
     cbar.set_label(cbar_label, fontsize=12)
 
     # Set title
@@ -320,7 +345,7 @@ def plot_ww3_map(
         f"Generated: {timestamp}",
         transform=ax.transAxes,
         fontsize=8,
-        bbox=dict(boxstyle="round", facecolor="white", alpha=0.8),
+        bbox={"boxstyle": "round", "facecolor": "white", "alpha": 0.8},
     )
 
     # Save figure
@@ -329,7 +354,7 @@ def plot_ww3_map(
     plt.savefig(output_file, dpi=150, bbox_inches="tight")
     plt.close()
 
-    logger.info(f"✅ Saved plot to: {output_file}")
+    logger.info("✅ Saved plot to: %s", output_file)
 
     # Also create a combined plot with both variables
     plot_combined_map(catalogue_df, output_dir, log_level=log_level)
@@ -343,29 +368,13 @@ def plot_combined_map(
     """
     Create a combined plot with both Hs and Tp side by side.
     """
-    logger = setup_logging(log_level)
+    _ = setup_logging(log_level)  # Reuse existing logger
 
     os.makedirs(output_dir, exist_ok=True)
 
     # Get data for both variables
-    def get_plot_data(var_name):
-        centroids = []
-        values = []
-        valid_products = catalogue_df[catalogue_df[var_name].notna()]
-
-        for _, row in valid_products.iterrows():
-            try:
-                polygon = wkt.loads(row["polygon SLC"])
-                centroid = polygon.centroid
-                centroids.append((centroid.x, centroid.y))
-                values.append(row[var_name])
-            except:
-                pass
-
-        return np.array(centroids), np.array(values)
-
-    centroids_hs, values_hs = get_plot_data("Hs WW3")
-    centroids_tp, values_tp = get_plot_data("Tp WW3")
+    centroids_hs, values_hs = _get_plot_data(catalogue_df, "Hs WW3")
+    centroids_tp, values_tp = _get_plot_data(catalogue_df, "Tp WW3")
 
     if len(centroids_hs) == 0 or len(centroids_tp) == 0:
         logger.error("No valid data for combined plot")
@@ -381,60 +390,24 @@ def plot_combined_map(
         1, 2, figsize=(16, 8), subplot_kw={"projection": ccrs.PlateCarree()}
     )
 
-    # Plot Hs
-    for ax, var_name, centroids, values, cmap, vmin, vmax in [
-        (
-            ax1,
-            "Hs WW3",
-            centroids_hs,
-            values_hs,
-            "viridis",
-            values_hs.min() * 0.9,
-            values_hs.max() * 1.1,
-        ),
-        (
-            ax2,
-            "Tp WW3",
-            centroids_tp,
-            values_tp,
-            "plasma",
-            values_tp.min() * 0.9,
-            values_tp.max() * 1.1,
-        ),
-    ]:
+    # Plot configurations
+    plot_configs = [
+        (ax1, "Hs WW3", centroids_hs, values_hs, "viridis"),
+        (ax2, "Tp WW3", centroids_tp, values_tp, "plasma"),
+    ]
+
+    for ax, var_name, centroids, values, cmap in plot_configs:
         ax.set_extent([lon_min, lon_max, lat_min, lat_max], crs=ccrs.PlateCarree())
 
         # Add map features
-        ax.add_feature(
-            cfeature.LAND, facecolor="lightgray", edgecolor="black", alpha=0.7
-        )
-        ax.add_feature(cfeature.OCEAN, facecolor="lightblue", alpha=0.3)
-        ax.add_feature(cfeature.COASTLINE, linewidth=0.8)
+        _add_map_features(ax)
 
-        # Gridlines
-        gl = ax.gridlines(
-            draw_labels=True, linewidth=0.5, color="gray", alpha=0.5, linestyle="--"
-        )
-        gl.top_labels = False
-        gl.right_labels = False
-        gl.xformatter = LONGITUDE_FORMATTER
-        gl.yformatter = LATITUDE_FORMATTER
+        # Calculate color limits
+        vmin = values.min() * 0.9
+        vmax = values.max() * 1.1
 
         # Scatter plot
-        scatter = ax.scatter(
-            centroids[:, 0],
-            centroids[:, 1],
-            c=values,
-            s=60,
-            cmap=cmap,
-            vmin=vmin,
-            vmax=vmax,
-            transform=ccrs.PlateCarree(),
-            edgecolor="black",
-            linewidth=0.5,
-            alpha=0.85,
-            zorder=10,
-        )
+        scatter = _create_scatter_plot(ax, centroids, values, vmin, vmax, cmap)
 
         # Colorbar
         cbar = fig.colorbar(scatter, ax=ax, orientation="vertical", pad=0.05)
@@ -455,11 +428,11 @@ def plot_combined_map(
     plt.savefig(output_file, dpi=150, bbox_inches="tight")
     plt.close()
 
-    logger.info(f"✅ Saved combined plot to: {output_file}")
+    logger.info("✅ Saved combined plot to: %s", output_file)
 
 
-def main():
-    """Main entry point."""
+def _parse_arguments() -> argparse.Namespace:
+    """Parse command line arguments."""
     parser = argparse.ArgumentParser(
         description="Create dummy catalogue and extract WW3 values",
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -547,7 +520,12 @@ Examples:
         "--lat_max", type=float, default=49.0, help="Maximum latitude (default: 49.0)"
     )
 
-    args = parser.parse_args()
+    return parser.parse_args()
+
+
+def main() -> None:
+    """Main entry point."""
+    args = _parse_arguments()
 
     # Setup logging
     logger = setup_logging(args.log_level)
@@ -580,7 +558,7 @@ Examples:
     # Step 3: Save catalogue if requested
     if args.output_catalogue:
         catalogue_df.to_parquet(args.output_catalogue)
-        logger.info(f"✅ Saved catalogue to: {args.output_catalogue}")
+        logger.info("✅ Saved catalogue to: %s", args.output_catalogue)
 
     # Step 4: Create maps
     logger.info("\n" + "=" * 60)
@@ -612,9 +590,9 @@ Examples:
 
     logger.info("\n" + "=" * 60)
     logger.info("✅ All done!")
-    logger.info(f"📁 Maps saved to: {args.output_png_dir}")
+    logger.info("📁 Maps saved to: %s", args.output_png_dir)
     if args.output_catalogue:
-        logger.info(f"📁 Catalogue saved to: {args.output_catalogue}")
+        logger.info("📁 Catalogue saved to: %s", args.output_catalogue)
     logger.info("=" * 60)
 
 

@@ -1,6 +1,7 @@
 """Browse API routes for filtering and exploring catalogue content."""
 
-from typing import Any, Optional, List
+from typing import Any, List, Optional
+
 import logging
 import traceback
 
@@ -13,18 +14,18 @@ from shapely import wkt
 from shapely.geometry import mapping
 
 from s1iw_catalogue.web.models import FilterRequest, HeatmapRequest, MapRequest
-from s1iw_catalogue.web.utils.data_loader import catalogue_manager
 from s1iw_catalogue.web.routes.responses import (
-    FILTER_RESPONSES,
-    EXPORT_RESPONSES,
-    MAP_RESPONSES,
-    HEATMAP_RESPONSES,
-    WIND_HEATMAP_RESPONSES,
     COUNTS_RESPONSES,
-    TIMESERIES_RESPONSES,
-    MONTHLY_TIMESERIES_RESPONSES,
+    EXPORT_RESPONSES,
+    FILTER_RESPONSES,
+    HEATMAP_RESPONSES,
+    MAP_RESPONSES,
     METADATA_RESPONSES,
+    MONTHLY_TIMESERIES_RESPONSES,
+    TIMESERIES_RESPONSES,
+    WIND_HEATMAP_RESPONSES,
 )
+from s1iw_catalogue.web.utils.data_loader import catalogue_manager
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -34,6 +35,7 @@ router = APIRouter()
 # Helper Functions
 # ============================================================================
 
+
 def _apply_filter(
     df: pl.DataFrame,
     filter_value: Any,
@@ -42,27 +44,27 @@ def _apply_filter(
 ) -> pl.DataFrame:
     """
     Generic filter application with different types.
-    
+
     Args:
         df: DataFrame to filter
         filter_value: Value to filter by
         column: Column name to filter on
         filter_type: Type of filter - "contains", "in", "gte", "lte", "presence", "dataset"
-    
+
     Returns:
         Filtered DataFrame
     """
     # Skip if filter value is None or empty
     if filter_value is None:
         return df
-    
+
     if column not in df.columns:
         return df
-    
+
     # Handle empty lists/strings
     if isinstance(filter_value, (list, str)) and len(filter_value) == 0:
         return df
-    
+
     try:
         if filter_type == "contains":
             return df.filter(pl.col(column).str.contains(filter_value))
@@ -93,11 +95,11 @@ def _apply_filter(
 def apply_filters(df: pl.DataFrame, filter_req: FilterRequest) -> pl.DataFrame:
     """
     Apply all filters to catalogue DataFrame.
-    
+
     Args:
         df: Input DataFrame
         filter_req: Filter request object
-    
+
     Returns:
         Filtered DataFrame
     """
@@ -118,13 +120,13 @@ def apply_filters(df: pl.DataFrame, filter_req: FilterRequest) -> pl.DataFrame:
             (filter_req.has_l1b, "PATH L1B XSP A21", "presence"),
             (filter_req.has_l1c, "PATH L1C XSP B17", "presence"),
         ]
-        
+
         # Apply all filters
         for value, column, filter_type in filters:
             df = _apply_filter(df, value, column, filter_type)
-        
+
         return df
-        
+
     except Exception as e:
         logger.exception("Error in apply_filters: %s", e)
         raise
@@ -134,21 +136,18 @@ def apply_filters(df: pl.DataFrame, filter_req: FilterRequest) -> pl.DataFrame:
 # API Routes
 # ============================================================================
 
-@router.post(
-    "/filter",
-    responses=FILTER_RESPONSES,
-    status_code=status.HTTP_200_OK
-)
+
+@router.post("/filter", responses=FILTER_RESPONSES, status_code=status.HTTP_200_OK)
 async def filter_catalogue(request: FilterRequest) -> dict[str, Any]:
     """
     Filter catalogue entries based on criteria.
-    
+
     Args:
         request: FilterRequest containing all filter parameters
-    
+
     Returns:
         Filtered catalogue entries with pagination
-    
+
     Raises:
         HTTPException: 503 if catalogue not loaded, 500 on internal error
     """
@@ -189,23 +188,19 @@ async def filter_catalogue(request: FilterRequest) -> dict[str, Any]:
         raise HTTPException(status_code=500, detail=str(e)) from e
 
 
-@router.post(
-    "/export",
-    responses=EXPORT_RESPONSES,
-    status_code=status.HTTP_200_OK
-)
+@router.post("/export", responses=EXPORT_RESPONSES, status_code=status.HTTP_200_OK)
 async def export_catalogue(request: FilterRequest) -> Response:
     """
     Export filtered catalogue as CSV with selected columns.
-    
+
     Args:
         request: FilterRequest containing filter parameters and column selection
-    
+
     Returns:
         CSV file as a Response
-    
+
     Raises:
-        HTTPException: 400 if no valid columns, 404 if no data, 
+        HTTPException: 400 if no valid columns, 404 if no data,
                       413 if too many rows, 503 if catalogue not loaded
     """
     try:
@@ -249,7 +244,7 @@ async def export_catalogue(request: FilterRequest) -> Response:
         list_cols = [c for c in df.columns if df[c].dtype == pl.List(pl.Utf8)]
         for col in list_cols:
             df = df.with_columns(pl.col(col).list.join(", ").alias(col))
-        
+
         # Convert Polars DataFrame to CSV
         csv_data = df.write_csv()
         csv_bytes = csv_data.encode("utf-8")
@@ -257,7 +252,9 @@ async def export_catalogue(request: FilterRequest) -> Response:
         return Response(
             content=csv_bytes,
             media_type="text/csv",
-            headers={"Content-Disposition": "attachment; filename=catalogue_export.csv"},
+            headers={
+                "Content-Disposition": "attachment; filename=catalogue_export.csv"
+            },
         )
     except HTTPException:
         raise
@@ -266,23 +263,19 @@ async def export_catalogue(request: FilterRequest) -> Response:
         raise HTTPException(status_code=500, detail=str(e)) from e
 
 
-@router.post(
-    "/map",
-    responses=MAP_RESPONSES,
-    status_code=status.HTTP_200_OK
-)
+@router.post("/map", responses=MAP_RESPONSES, status_code=status.HTTP_200_OK)
 async def get_map_data(request: MapRequest) -> dict[str, Any]:
     """
     Get product data with geometry for map visualization.
-    
+
     Returns polygons (simplified if many features).
-    
+
     Args:
         request: MapRequest containing filter and max_polygons parameters
-    
+
     Returns:
         GeoJSON FeatureCollection
-    
+
     Raises:
         HTTPException: 503 if catalogue not loaded, 500 on internal error
     """
@@ -328,7 +321,9 @@ async def get_map_data(request: MapRequest) -> dict[str, Any]:
                             else None
                         ),
                         "horodating": (
-                            str(row.get("horodating")) if row.get("horodating") else None
+                            str(row.get("horodating"))
+                            if row.get("horodating")
+                            else None
                         ),
                     },
                 }
@@ -352,20 +347,18 @@ async def get_map_data(request: MapRequest) -> dict[str, Any]:
 
 
 @router.post(
-    "/heatmap/hs_tp",
-    responses=HEATMAP_RESPONSES,
-    status_code=status.HTTP_200_OK
+    "/heatmap/hs_tp", responses=HEATMAP_RESPONSES, status_code=status.HTTP_200_OK
 )
 async def get_hs_tp_heatmap(request: HeatmapRequest) -> dict[str, Any]:
     """
     Get Hs/Tp data with density estimation.
-    
+
     Args:
         request: HeatmapRequest containing filter parameters
-    
+
     Returns:
         Heatmap data with Hs, Tp values and density estimates
-    
+
     Raises:
         HTTPException: 503 if catalogue not loaded, 500 on internal error
     """
@@ -375,7 +368,9 @@ async def get_hs_tp_heatmap(request: HeatmapRequest) -> dict[str, Any]:
 
         df = apply_filters(catalogue_manager.df, request.filter)
 
-        hs_tp_df = df.filter(pl.col("Hs WW3").is_finite() & pl.col("Tp WW3").is_finite())
+        hs_tp_df = df.filter(
+            pl.col("Hs WW3").is_finite() & pl.col("Tp WW3").is_finite()
+        )
 
         if hs_tp_df.height == 0:
             return {
@@ -392,7 +387,11 @@ async def get_hs_tp_heatmap(request: HeatmapRequest) -> dict[str, Any]:
 
         if len(hs) < 2:
             return {
-                "data": {"hs": hs.tolist(), "tp": tp.tolist(), "density": [1.0] * len(hs)},
+                "data": {
+                    "hs": hs.tolist(),
+                    "tp": tp.tolist(),
+                    "density": [1.0] * len(hs),
+                },
                 "count": len(hs),
             }
 
@@ -418,20 +417,18 @@ async def get_hs_tp_heatmap(request: HeatmapRequest) -> dict[str, Any]:
 
 
 @router.post(
-    "/heatmap/wind",
-    responses=WIND_HEATMAP_RESPONSES,
-    status_code=status.HTTP_200_OK
+    "/heatmap/wind", responses=WIND_HEATMAP_RESPONSES, status_code=status.HTTP_200_OK
 )
 async def get_wind_heatmap(request: HeatmapRequest) -> dict[str, Any]:
     """
     Get wind direction/speed data with density estimation.
-    
+
     Args:
         request: HeatmapRequest containing filter parameters
-    
+
     Returns:
         Wind heatmap data with speed, direction and density estimates
-    
+
     Raises:
         HTTPException: 503 if catalogue not loaded, 500 on internal error
     """
@@ -504,20 +501,18 @@ async def get_wind_heatmap(request: HeatmapRequest) -> dict[str, Any]:
 
 
 @router.post(
-    "/category_counts",
-    responses=COUNTS_RESPONSES,
-    status_code=status.HTTP_200_OK
+    "/category_counts", responses=COUNTS_RESPONSES, status_code=status.HTTP_200_OK
 )
 async def get_category_counts(request: FilterRequest) -> dict[str, Any]:
     """
     Get counts of products per category.
-    
+
     Args:
         request: FilterRequest containing filter parameters
-    
+
     Returns:
         Dictionary with category counts and total
-    
+
     Raises:
         HTTPException: 503 if catalogue not loaded, 500 on internal error
     """
@@ -542,20 +537,18 @@ async def get_category_counts(request: FilterRequest) -> dict[str, Any]:
 
 
 @router.post(
-    "/daily_counts",
-    responses=TIMESERIES_RESPONSES,
-    status_code=status.HTTP_200_OK
+    "/daily_counts", responses=TIMESERIES_RESPONSES, status_code=status.HTTP_200_OK
 )
 async def get_daily_counts(request: FilterRequest) -> dict[str, Any]:
     """
     Get daily product counts per dataset for stacked bar chart.
-    
+
     Args:
         request: FilterRequest containing filter parameters
-    
+
     Returns:
         Daily time series data grouped by dataset
-    
+
     Raises:
         HTTPException: 503 if catalogue not loaded, 500 on internal error
     """
@@ -603,18 +596,18 @@ async def get_daily_counts(request: FilterRequest) -> dict[str, Any]:
 @router.post(
     "/monthly_counts",
     responses=MONTHLY_TIMESERIES_RESPONSES,
-    status_code=status.HTTP_200_OK
+    status_code=status.HTTP_200_OK,
 )
 async def get_monthly_counts(request: FilterRequest) -> dict[str, Any]:
     """
     Get monthly product counts per dataset for stacked bar chart.
-    
+
     Args:
         request: FilterRequest containing filter parameters
-    
+
     Returns:
         Monthly time series data grouped by dataset
-    
+
     Raises:
         HTTPException: 503 if catalogue not loaded, 500 on internal error
     """
@@ -627,7 +620,9 @@ async def get_monthly_counts(request: FilterRequest) -> dict[str, Any]:
         if "start date SAFE" not in df.columns or "datasets" not in df.columns:
             return {"error": "Missing required columns"}
 
-        df = df.with_columns(pl.col("start date SAFE").dt.truncate("1mo").alias("month"))
+        df = df.with_columns(
+            pl.col("start date SAFE").dt.truncate("1mo").alias("month")
+        )
 
         exploded = df.explode("datasets")
         counts = exploded.group_by(["month", "datasets"]).agg(pl.len())
@@ -662,17 +657,15 @@ async def get_monthly_counts(request: FilterRequest) -> dict[str, Any]:
 
 
 @router.get(
-    "/datasets_metadata",
-    responses=METADATA_RESPONSES,
-    status_code=status.HTTP_200_OK
+    "/datasets_metadata", responses=METADATA_RESPONSES, status_code=status.HTTP_200_OK
 )
 async def get_datasets_metadata() -> dict[str, Any]:
     """
     Get metadata for all datasets with counts.
-    
+
     Returns:
         Dictionary containing dataset metadata and debug information
-    
+
     Raises:
         HTTPException: 503 if catalogue not loaded, 500 on internal error
     """
@@ -685,8 +678,12 @@ async def get_datasets_metadata() -> dict[str, Any]:
 
         debug = {
             "has_datasets_col": "datasets" in df.columns,
-            "dtype": str(df["datasets"].dtype) if "datasets" in df.columns else "absent",
-            "sample": df["datasets"].head(2).to_list() if "datasets" in df.columns else [],
+            "dtype": (
+                str(df["datasets"].dtype) if "datasets" in df.columns else "absent"
+            ),
+            "sample": (
+                df["datasets"].head(2).to_list() if "datasets" in df.columns else []
+            ),
             "non_empty_rows": (
                 df.filter(pl.col("datasets").is_not_null()).height
                 if "datasets" in df.columns
