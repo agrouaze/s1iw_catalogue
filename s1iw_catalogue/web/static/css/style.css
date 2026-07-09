@@ -467,3 +467,14 @@ body {
         font-size: 1.25rem;
     }
 }
+.catalogue-info {
+    text-align: right;
+    font-size: 0.8rem;
+    color: var(--text-light);
+    margin-bottom: 16px;
+    padding: 4px 0;
+}
+
+.catalogue-meta {
+    margin: 0;
+}

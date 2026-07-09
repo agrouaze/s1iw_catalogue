@@ -1545,34 +1545,26 @@ class CatalogueUpdater:
     def _update_polygons_and_s3paths(self, df: pl.DataFrame) -> pl.DataFrame:
         """
         Query CDSE to get polygon footprints and S3 paths for SAFE products that are missing this info.
-        Uses cdsodatacli.query.fetch_data with exact date ranges from the SAFE names.
+        Uses cdsodatacli.get_products_metadata.fetch_all_batches for direct SAFE name lookup.
         Only queries products that don't already have polygon/S3path information.
-        Supports caching via cdse_cache_dir configuration.
         """
         logger.info(
             "Fetching polygon footprints and S3 paths from CDSE for missing products..."
         )
 
         try:
-            import geopandas as gpd
             import pandas as pd
-            from cdsodatacli.query import fetch_data
-            from shapely.geometry import box
+            from cdsodatacli.get_products_metadata import (
+                create_urls_from_safe_names,
+                fetch_all_batches,
+                post_process_data,
+            )
+            from cdsodatacli.fetch_access_token import get_access_token
         except ImportError as e:
             logger.warning(
-                f"cdsodatacli or geopandas not installed: {e}. Skipping polygon fetch."
+                f"cdsodatacli not installed: {e}. Skipping polygon fetch."
             )
             return df
-
-        # Get cache directory from config if available
-        cache_dir = self._config.get("cdse_cache_dir", None)
-        if cache_dir:
-            cache_dir = Path(cache_dir)
-            logger.info(f"Using CDSE cache directory: {cache_dir}")
-            # Ensure cache directory exists
-            cache_dir.mkdir(parents=True, exist_ok=True)
-        else:
-            logger.info("No CDSE cache directory configured. Cache disabled.")
 
         # Identify products missing polygon or S3path information
         missing_polygon_slc = df.filter(
@@ -1606,141 +1598,162 @@ class CatalogueUpdater:
             f"Found {len(all_missing)} products missing polygon or S3path information."
         )
 
-        # Process in batches to avoid overwhelming the API
-        batch_size = 50
-        all_results = []
+        # Get authentication if configured
+        headers = None
+        if self._config.get("cdse_email") and self._config.get("cdse_password"):
+            try:
+                logger.info("Authenticating with CDSE...")
+                headers = get_access_token(
+                    self._config["cdse_email"],
+                    self._config["cdse_password"]
+                )
+                logger.info("Authentication successful")
+            except Exception as e:
+                logger.warning(f"Authentication failed: {e}. Continuing without auth.")
 
-        for i in range(0, len(all_missing), batch_size):
-            batch_names = all_missing[i : i + batch_size]
-            logger.info(
-                f"Processing batch {i//batch_size + 1}/{(len(all_missing)-1)//batch_size + 1} ({len(batch_names)} products)"
+        # Get cache directory from config if available
+        cache_dir = self._config.get("cdse_cache_dir", None)
+        if cache_dir:
+            cache_dir = Path(cache_dir)
+            logger.info(f"Using CDSE cache directory: {cache_dir}")
+            cache_dir.mkdir(parents=True, exist_ok=True)
+        else:
+            logger.info("No CDSE cache directory configured. Cache disabled.")
+
+        try:
+            # Create batches from SAFE names (direct lookup, no geometry needed!)
+            logger.info(f"Creating batches for {len(all_missing)} SAFE names...")
+            batch_size = self._config.get("cdse_batch_size", 50)
+            batches = create_urls_from_safe_names(
+                safe_names=all_missing,
+                batch_size=batch_size,
+                logger=logger
+            )
+            logger.info(f"Created {len(batches)} batch(es)")
+
+            # Fetch metadata for all batches
+            logger.info(f"Fetching metadata with {self._config.get('cdse_max_workers', 4)} workers...")
+            df_results, stats = fetch_all_batches(
+                batches=batches,
+                headers=headers,
+                cache_dir=str(cache_dir) if cache_dir else None,
+                max_workers=self._config.get("cdse_max_workers", 4),
+                timeout=self._config.get("cdse_timeout", 30),
+                logger=logger
             )
 
-            records = []
-            for safe_name in batch_names:
-                try:
-                    # Use the existing parse_safe_name method
-                    parsed = self.parse_safe_name(safe_name)
-                    start_date = parsed["start_date"]
-                    end_date = parsed["end_date"]
-                    # mission = parsed["mission"]
-                    product_type = parsed["product_type"]
+            if df_results.empty:
+                logger.warning("No results returned from CDSE.")
+                return df
 
-                    # Explicitly set the product type filter to match the product type
-                    # For SLC products, the product type is "SLC_" in CDSE
-                    # For GRD products, it's "GRD"
-                    if product_type.upper() == "SLC":
-                        cdse_product_type = "SLC"
-                        sensormode = "IW"
-                    elif (
-                        product_type.upper() == "GRDH" or product_type.upper() == "GRD"
-                    ):
-                        cdse_product_type = "GRD"
-                        sensormode = "IW"
-                    else:
-                        cdse_product_type = None
-                        sensormode = "IW"
+            logger.info(f"Retrieved {len(df_results)} products from CDSE.")
 
-                    records.append(
-                        {
-                            "start_datetime": start_date,
-                            "end_datetime": end_date,
-                            "collection": "SENTINEL-1",
-                            "name": safe_name,  # exact name pattern
-                            "sensormode": sensormode,
-                            "producttype": cdse_product_type,  # Set product type explicitly
-                            "geometry": box(-180, -90, 180, 90),
-                        }
+            # Post-process results (deduplication + geometry conversion)
+            logger.info("Post-processing results...")
+            gdf = post_process_data(df_results, logger)
+            logger.info(f"Post-processed {len(gdf)} products")
+
+            # Create lookup dictionaries
+            polygon_dict = {}
+            s3path_dict = {}
+
+            for _, row in gdf.iterrows():
+                safe_name = row.get("Name")
+                if safe_name:
+                    if "geometry" in row and row.geometry is not None:
+                        polygon_dict[safe_name] = row.geometry.wkt
+                    # Try different possible column names for S3 path
+                    s3_path = (
+                        row.get("S3path from CDSE") or
+                        row.get("DownloadUrl") or
+                        row.get("S3Path") or
+                        row.get("S3path")
                     )
-                except Exception as e:
-                    logger.warning(f"Could not parse SAFE name {safe_name}: {e}")
-                    continue
+                    if s3_path:
+                        s3path_dict[safe_name] = s3_path
 
-            if not records:
-                continue
+            logger.info(
+                f"Got polygons for {len(polygon_dict)} products and S3 paths for {len(s3path_dict)} products."
+            )
 
-            gdf = gpd.GeoDataFrame(records, crs="EPSG:4326")
-            # Add required id_query column if missing
-            if "id_query" not in gdf.columns:
-                gdf["id_query"] = [f"batch_{i}_{j}" for j in range(len(gdf))]
+            # Log which products were found vs missing
+            found_slc = [name for name in missing_slc if name in polygon_dict]
+            found_grd = [name for name in missing_grd if name in polygon_dict]
+            missing_slc_after = [name for name in missing_slc if name not in polygon_dict]
+            missing_grd_after = [name for name in missing_grd if name not in polygon_dict]
 
-            try:
-                # Pass cache_dir to fetch_data if configured
-                with open(os.devnull, "w") as devnull:
-                    with contextlib.redirect_stdout(devnull):
-                        result_df = fetch_data(
-                            gdf=gdf,
-                            timedelta_slice=datetime.timedelta(days=1),
-                            top=1000,
-                            querymode="multi",
-                            cache_dir=(
-                                str(cache_dir) if cache_dir else None
-                            ),  # <-- Added cache_dir support
-                            display_tqdm=False,
-                        )
-                if result_df is not None and not result_df.empty:
-                    all_results.append(result_df)
-                    logger.info(
-                        f"Retrieved {len(result_df)} products from CDSE for this batch."
-                    )
-                else:
-                    logger.warning(f"No products found in CDSE for batch.")
-            except Exception as e:
-                logger.error(f"Error querying CDSE for batch: {e}")
-                import traceback
+            if missing_slc_after:
+                logger.warning(f"SLC products still missing polygons: {missing_slc_after[:5]}...")
+            if missing_grd_after:
+                logger.warning(f"GRD products still missing polygons: {missing_grd_after[:5]}...")
 
-                logger.debug(traceback.format_exc())
-                continue
+            # Update the DataFrame
+            df = self._apply_lookups_to_dataframe(df, polygon_dict, s3path_dict)
 
-        if not all_results:
-            logger.warning("No results returned from CDSE.")
-            return df
+            # Count how many were updated
+            updated_polygon_slc = df.filter(
+                pl.col("SAFE SLC").is_not_null() & pl.col("polygon SLC").is_not_null()
+            ).height
+            updated_polygon_grd = df.filter(
+                pl.col("SAFE GRD").is_not_null() & pl.col("polygon GRD").is_not_null()
+            ).height
+            updated_s3_slc = df.filter(
+                pl.col("SAFE SLC").is_not_null() & pl.col("S3path SLC").is_not_null()
+            ).height
+            updated_s3_grd = df.filter(
+                pl.col("SAFE GRD").is_not_null() & pl.col("S3path GRD").is_not_null()
+            ).height
 
-        # Combine results
-        combined_results = pd.concat(all_results, ignore_index=True)
-        logger.info(f"Total retrieved {len(combined_results)} products from CDSE.")
+            logger.info(
+                f"Updated polygons for {updated_polygon_slc} SLC and {updated_polygon_grd} GRD products."
+            )
+            logger.info(
+                f"Updated S3 paths for {updated_s3_slc} SLC and {updated_s3_grd} GRD products."
+            )
 
-        # Create lookup dictionaries
-        polygon_dict = {}
-        s3path_dict = {}
-
-        for _, row in combined_results.iterrows():
-            safe_name = row.get("Name")
-            if safe_name:
-                if "geometry" in row and row.geometry is not None:
-                    polygon_dict[safe_name] = row.geometry.wkt
-                s3_path = (
-                    row.get("S3path from CDSE")
-                    or row.get("DownloadUrl")
-                    or row.get("S3Path")
+            # Log statistics from fetch_all_batches
+            logger.info("\n" + "=" * 60)
+            logger.info("📊 CDSE FETCH STATISTICS")
+            logger.info("=" * 60)
+            logger.info(f"Total products requested: {stats['products_expected']}")
+            logger.info(f"Products found: {stats['products_found']}")
+            if stats["products_expected"] > 0:
+                logger.info(
+                    f"Success rate: {stats['products_found']/stats['products_expected']*100:.1f}%"
                 )
-                if s3_path:
-                    s3path_dict[safe_name] = s3_path
+            logger.info(f"Batches: {stats['successful']} OK, {stats['failed']} failed")
+            logger.info(f"Cache hits: {stats['cached']}")
+            logger.info(f"Total time: {stats['elapsed_time']:.2f}s")
+            if stats["products_found"] > 0:
+                logger.info(
+                    f"Throughput: {stats['products_found']/stats['elapsed_time']:.1f} products/s"
+                )
+            logger.info("=" * 60)
 
-        logger.info(
-            f"Got polygons for {len(polygon_dict)} products and S3 paths for {len(s3path_dict)} products."
-        )
+        except Exception as e:
+            logger.error(f"Error fetching metadata from CDSE: {e}")
+            import traceback
+            logger.debug(traceback.format_exc())
 
-        # Log which products were found vs missing
-        found_slc = [name for name in missing_slc if name in polygon_dict]
-        found_grd = [name for name in missing_grd if name in polygon_dict]
-        missing_slc_after = [name for name in missing_slc if name not in polygon_dict]
-        missing_grd_after = [name for name in missing_grd if name not in polygon_dict]
+        return df
 
-        if missing_slc_after:
-            logger.warning(f"SLC products still missing polygons: {missing_slc_after}")
-        if missing_grd_after:
-            logger.warning(f"GRD products still missing polygons: {missing_grd_after}")
 
-        # Update the DataFrame only for products that were missing
+    def _apply_lookups_to_dataframe(
+        self,
+        df: pl.DataFrame,
+        polygon_dict: dict,
+        s3path_dict: dict
+    ) -> pl.DataFrame:
+        """Apply polygon and S3 path lookups to the DataFrame."""
+        
         # Update polygon SLC
         df = df.with_columns(
-            pl.when(pl.col("SAFE SLC").is_not_null() & pl.col("polygon SLC").is_null())
+            pl.when(
+                pl.col("SAFE SLC").is_not_null() & pl.col("polygon SLC").is_null()
+            )
             .then(
                 pl.struct(["SAFE SLC"]).map_elements(
-                    lambda x: (
-                        polygon_dict.get(x["SAFE SLC"]) if x["SAFE SLC"] else None
-                    ),
+                    lambda x: polygon_dict.get(x["SAFE SLC"]) if x["SAFE SLC"] else None,
                     return_dtype=pl.Utf8,
                 )
             )
@@ -1750,12 +1763,12 @@ class CatalogueUpdater:
 
         # Update polygon GRD
         df = df.with_columns(
-            pl.when(pl.col("SAFE GRD").is_not_null() & pl.col("polygon GRD").is_null())
+            pl.when(
+                pl.col("SAFE GRD").is_not_null() & pl.col("polygon GRD").is_null()
+            )
             .then(
                 pl.struct(["SAFE GRD"]).map_elements(
-                    lambda x: (
-                        polygon_dict.get(x["SAFE GRD"]) if x["SAFE GRD"] else None
-                    ),
+                    lambda x: polygon_dict.get(x["SAFE GRD"]) if x["SAFE GRD"] else None,
                     return_dtype=pl.Utf8,
                 )
             )
@@ -1765,7 +1778,9 @@ class CatalogueUpdater:
 
         # Update S3path SLC
         df = df.with_columns(
-            pl.when(pl.col("SAFE SLC").is_not_null() & pl.col("S3path SLC").is_null())
+            pl.when(
+                pl.col("SAFE SLC").is_not_null() & pl.col("S3path SLC").is_null()
+            )
             .then(
                 pl.struct(["SAFE SLC"]).map_elements(
                     lambda x: s3path_dict.get(x["SAFE SLC"]) if x["SAFE SLC"] else None,
@@ -1778,7 +1793,9 @@ class CatalogueUpdater:
 
         # Update S3path GRD
         df = df.with_columns(
-            pl.when(pl.col("SAFE GRD").is_not_null() & pl.col("S3path GRD").is_null())
+            pl.when(
+                pl.col("SAFE GRD").is_not_null() & pl.col("S3path GRD").is_null()
+            )
             .then(
                 pl.struct(["SAFE GRD"]).map_elements(
                     lambda x: s3path_dict.get(x["SAFE GRD"]) if x["SAFE GRD"] else None,
@@ -1787,27 +1804,6 @@ class CatalogueUpdater:
             )
             .otherwise(pl.col("S3path GRD"))
             .alias("S3path GRD")
-        )
-
-        # Count how many were updated
-        updated_polygon_slc = df.filter(
-            pl.col("SAFE SLC").is_not_null() & pl.col("polygon SLC").is_not_null()
-        ).height
-        updated_polygon_grd = df.filter(
-            pl.col("SAFE GRD").is_not_null() & pl.col("polygon GRD").is_not_null()
-        ).height
-        updated_s3_slc = df.filter(
-            pl.col("SAFE SLC").is_not_null() & pl.col("S3path SLC").is_not_null()
-        ).height
-        updated_s3_grd = df.filter(
-            pl.col("SAFE GRD").is_not_null() & pl.col("S3path GRD").is_not_null()
-        ).height
-
-        logger.info(
-            f"Updated polygons for {updated_polygon_slc} SLC and {updated_polygon_grd} GRD products."
-        )
-        logger.info(
-            f"Updated S3 paths for {updated_s3_slc} SLC and {updated_s3_grd} GRD products."
         )
 
         return df

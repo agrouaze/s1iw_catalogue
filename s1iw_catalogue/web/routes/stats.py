@@ -3,6 +3,8 @@
 from typing import Any, Dict
 
 import logging
+import os
+from datetime import datetime
 
 import polars as pl
 from fastapi import APIRouter, HTTPException
@@ -24,7 +26,12 @@ async def get_global_stats() -> dict[str, Any]:
     df = catalogue_manager.df
     stats = CatalogueStats(df)
 
-    # Compute global stats
+    # Get catalogue file modification time
+    catalogue_mtime = None
+    if catalogue_manager.path and catalogue_manager.path.exists():
+        mtime = os.path.getmtime(catalogue_manager.path)
+        catalogue_mtime = datetime.fromtimestamp(mtime).isoformat()
+
     result = {
         "total_count": stats.total_count(),
         "product_type_counts": stats.product_type_counts(),
@@ -37,6 +44,7 @@ async def get_global_stats() -> dict[str, Any]:
         "dataset_counts": stats.dataset_membership_counts(),
         "latest_acquisition": stats.latest_acquisition(),
         "latest_horodating": stats.latest_horodating(),
+        "catalogue_last_modified": catalogue_mtime,  # <-- AJOUT
     }
 
     # Convert datetime objects to ISO strings

@@ -1,8 +1,9 @@
 """Catalogue loading and caching utilities."""
 
+from typing import Any
+
 import logging
 from pathlib import Path
-from typing import Any
 
 import polars as pl
 

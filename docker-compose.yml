@@ -1,0 +1,11 @@
+services:
+  web:
+    build:
+      context: .
+    ports:
+      - "8649:8649"
+    volumes:
+      - /ontap/user/agrouaze/sources/git/reference_iw_safe_ifr_collections/merge_jolina_lagoon.parquet:/data/catalogue.parquet
+      - /ontap/user/agrouaze/sources/git/reference_iw_safe_ifr_collections/s1iw_catalogue/localconfig_second_real.yml:/data/config.yml
+      - /home/antoine/Documents/sources/s1iw_catalogue/merge_jolina_lagoon.parquet:/data/catalogue.parquet
+      - /home/antoine/Documents/sources/s1iw_catalogue/s1iw_catalogue/localconfig_second_real.yml:/data/config.yml

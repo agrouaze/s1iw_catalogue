@@ -1,4 +1,3 @@
-# s1iw_catalogue/__init__.py
 """
 s1iw_catalogue – Exhaustive catalogue of Sentinel-1 IW SAFE products for Ifremer.
 """
@@ -6,15 +5,19 @@ s1iw_catalogue – Exhaustive catalogue of Sentinel-1 IW SAFE products for Ifrem
 from __future__ import annotations
 
 from ._version import __version__, version, version_tuple
-from .catalogue import S1IWCatalogue
-from .config import load_config
+
+# ✅ Kept: stats.py is copied in Docker and needed by the web app
 from .stats import CatalogueStats
+
+# ❌ REMOVED: catalogue.py and config.py are NOT in the Docker image
+# from .catalogue import S1IWCatalogue
+# from .config import load_config
 
 __all__ = [
     "__version__",
     "version",
     "version_tuple",
-    "S1IWCatalogue",
-    "load_config",
+    # "S1IWCatalogue",
+    # "load_config",
     "CatalogueStats",
 ]

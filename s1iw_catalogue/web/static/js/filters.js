@@ -1,12 +1,74 @@
 // filters.js - Reads filter form state, wires up form/pagination events,
-// and orchestrates the initial page load. Relies on rendering/fetching
-// functions defined in browse.js (loaded before this file).
+// and orchestrates the initial page load.
 
 document.addEventListener('DOMContentLoaded', function() {
     const form = document.getElementById('filter-form');
     const resetBtn = form?.querySelector('button[type="reset"]');
     const prevBtn = document.getElementById('prev-page');
     const nextBtn = document.getElementById('next-page');
+    const exportBtn = document.getElementById('export-csv-btn');
+    const filterToggleBtn = document.getElementById('filter-toggle-btn');
+    const filterPanel = document.getElementById('filter-panel');
+    const filterCountBadge = document.getElementById('filter-count-badge');
+
+    // ---- Filter panel toggle ----
+
+    let filterPanelOpen = true;
+    filterToggleBtn?.addEventListener('click', function() {
+        filterPanelOpen = !filterPanelOpen;
+        filterPanel.style.display = filterPanelOpen ? 'block' : 'none';
+        document.getElementById('filter-toggle-icon').textContent = filterPanelOpen ? '▼' : '▶';
+    });
+
+    // ---- Toggle buttons (3 states) ----
+
+    const toggleBtns = document.querySelectorAll('.toggle-btn');
+
+    toggleBtns.forEach(btn => {
+        btn.addEventListener('click', function(e) {
+            e.stopPropagation();
+            const currentState = this.dataset.state;
+            let nextState;
+            if (currentState === 'neutral') nextState = 'with';
+            else if (currentState === 'with') nextState = 'without';
+            else nextState = 'neutral';
+            this.dataset.state = nextState;
+            updateToggleIcon(this);
+        });
+    });
+
+    function updateToggleIcon(btn) {
+        const icon = btn.querySelector('.toggle-icon');
+        const state = btn.dataset.state;
+        if (state === 'neutral') {
+            icon.textContent = '⚪';
+            btn.title = 'Neutral (no filter)';
+        } else if (state === 'with') {
+            icon.textContent = '✅';
+            btn.title = 'With (IS NOT NULL)';
+        } else {
+            icon.textContent = '❌';
+            btn.title = 'Without (IS NULL)';
+        }
+    }
+
+    function getToggleState(col) {
+        const btn = document.querySelector(`.toggle-group[data-col="${col}"] .toggle-btn`);
+        if (!btn) return null;
+        const state = btn.dataset.state;
+        if (state === 'with') return true;
+        if (state === 'without') return false;
+        return null;
+    }
+
+    function resetToggles() {
+        toggleBtns.forEach(btn => {
+            btn.dataset.state = 'neutral';
+            updateToggleIcon(btn);
+        });
+    }
+
+    // ---- Filter state ----
 
     function getFilterState() {
         const datasetSelect = document.getElementById('dataset-filter');
@@ -14,7 +76,13 @@ document.addEventListener('DOMContentLoaded', function() {
             ? Array.from(datasetSelect.selectedOptions).map(opt => opt.value)
             : [];
 
-        return {
+        const hasSlc = getToggleState('slc');
+        const hasGrd = getToggleState('grd');
+        const hasOcn = getToggleState('ocn');
+        const hasL1b = getToggleState('l1b');
+        const hasL1c = getToggleState('l1c');
+
+        const state = {
             slc_name: document.getElementById('slc-filter').value || null,
             grd_name: document.getElementById('grd-filter').value || null,
             datasets: selectedDatasets,
@@ -25,32 +93,45 @@ document.addEventListener('DOMContentLoaded', function() {
             limit: window.pageSize,
             offset: window.getCurrentPage() * window.pageSize
         };
+
+        if (hasSlc !== null) state.has_slc = hasSlc;
+        if (hasGrd !== null) state.has_grd = hasGrd;
+        if (hasOcn !== null) state.has_ocn = hasOcn;
+        if (hasL1b !== null) state.has_l1b = hasL1b;
+        if (hasL1c !== null) state.has_l1c = hasL1c;
+
+        return state;
+    }
+
+    function updateTotalCount(total) {
+        const el = document.getElementById('total-results-count');
+        if (el) {
+            el.textContent = total === 0 ? 'No products found' : `${total} product${total > 1 ? 's' : ''}`;
+        }
+        // Update badge
+        if (filterCountBadge) {
+            filterCountBadge.textContent = total > 0 ? total : '';
+            filterCountBadge.style.display = total > 0 ? 'inline-block' : 'none';
+        }
     }
 
     function renderAll() {
         const filters = getFilterState();
-        window.updateResultsTable(filters);
+        window.updateResultsTable(filters, updateTotalCount);
         window.fetchAggregatesAndRender(filters);
         window.updateHsTpHeatmap(filters);
         window.updateWindHeatmap(filters);
         window.updateCategoryPieChart(filters);
         window.updateMonthlyBarChart(filters);
         window.updateMap(filters);
-
-        // Afficher un toast avec le nombre de résultats
-        // On utilise la fonction updateResultsTable qui a déjà récupéré les données.
-        // On peut récupérer le total depuis le DOM, ou depuis la dernière requête.
-        // Pour simplifier, on peut afficher un message générique.
-        // Mais on peut aussi récupérer le total depuis la dernière requête via une variable globale.
-        // Je propose d'ajouter un champ "total" dans le JSON retourné par /filter, et de le stocker.
-        // Pour l'instant, on affiche un message simple.
-        window.showToast('✅ Filtres appliqués – données mises à jour');
     }
 
     function applyFilters() {
         window.resetPageToFirst();
         renderAll();
     }
+
+    // ---- Event Listeners ----
 
     if (form) {
         form.addEventListener('submit', function(e) {
@@ -63,6 +144,7 @@ document.addEventListener('DOMContentLoaded', function() {
         resetBtn.addEventListener('click', function(e) {
             e.preventDefault();
             form.reset();
+            resetToggles();
             window.updateDatasetDescriptionBox();
             applyFilters();
         });
@@ -72,7 +154,7 @@ document.addEventListener('DOMContentLoaded', function() {
         prevBtn.addEventListener('click', function() {
             if (window.getCurrentPage() > 0) {
                 window.decrementPage();
-                window.updateResultsTable(getFilterState());
+                window.updateResultsTable(getFilterState(), updateTotalCount);
             }
         });
     }
@@ -80,44 +162,28 @@ document.addEventListener('DOMContentLoaded', function() {
     if (nextBtn) {
         nextBtn.addEventListener('click', function() {
             window.incrementPage();
-            window.updateResultsTable(getFilterState());
+            window.updateResultsTable(getFilterState(), updateTotalCount);
         });
     }
 
-    // Expose for debugging / potential reuse by other scripts
-    window.getFilterState = getFilterState;
+    // ---- Export CSV ----
 
-    // Initial load: fetch dataset metadata (populates the dataset select + colors),
-    // then render everything with the default (empty) filter state.
+    if (exportBtn) {
+        exportBtn.addEventListener('click', function() {
+            const filters = getFilterState();
+            window.exportCSV(filters);
+        });
+    }
+
+    // ---- Expose for debugging ----
+
+    window.getFilterState = getFilterState;
+    window.resetToggles = resetToggles;
+    window.updateTotalCount = updateTotalCount;
+
+    // ---- Initial load ----
+
     window.loadDatasetMetadata().then(() => {
         renderAll();
     });
 });
-
-
-function showToast(message) {
-    const toast = document.getElementById('toast');
-    const msgEl = document.getElementById('toast-message');
-    if (!toast || !msgEl) return;
-
-    msgEl.textContent = message;
-    toast.classList.add('show');
-
-    // Auto-hide after 3.5 seconds
-    clearTimeout(window.toastTimeout);
-    window.toastTimeout = setTimeout(() => {
-        hideToast();
-    }, 3500);
-}
-
-function hideToast() {
-    const toast = document.getElementById('toast');
-    if (toast) {
-        toast.classList.remove('show');
-        clearTimeout(window.toastTimeout);
-    }
-}
-
-// Expose to global scope
-window.showToast = showToast;
-window.hideToast = hideToast;

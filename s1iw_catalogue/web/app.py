@@ -1,9 +1,10 @@
 """FastAPI application for s1iw_catalogue web interface."""
 
-import os
+import logging
 from contextlib import asynccontextmanager
 from pathlib import Path
 
+import yaml
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
@@ -11,101 +12,107 @@ from fastapi.staticfiles import StaticFiles
 from s1iw_catalogue.web.routes import browse, stats
 from s1iw_catalogue.web.template_engine import get_templates
 from s1iw_catalogue.web.utils.data_loader import catalogue_manager
-import logging
+
 logging.getLogger("s1iw_catalogue.catalogue").setLevel(logging.DEBUG)
 
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    """
-    Lifespan context manager for startup/shutdown events.
 
-    Loads the catalogue and its dataset metadata from the config file.
-    """
-    catalogue_path = os.environ.get("S1IW_CATALOGUE_PATH")
-    config_path = os.environ.get("S1IW_CONFIG_PATH")
+def create_app(
+    catalogue_path: Path | None = None, config_path: Path | None = None
+) -> FastAPI:
+    """Factory to create the FastAPI app (avoids heavy module-level imports)."""
 
-    if catalogue_path:
-        catalogue_manager.load(Path(catalogue_path))
-        print(f"Loaded catalogue: {catalogue_path}")
+    @asynccontextmanager
+    async def lifespan(app: FastAPI):
+        """Startup/shutdown: loads catalogue and dataset metadata."""
+        if catalogue_path:
+            catalogue_manager.load(catalogue_path)
+            print(f"Loaded catalogue: {catalogue_path}")
 
-        # Load dataset metadata if config path is provided
-        if config_path:
-            try:
-                from s1iw_catalogue.catalogue import S1IWCatalogue
+            if config_path:
+                try:
+                    with open(config_path) as f:
+                        config_data = yaml.safe_load(f)
 
-                cat = S1IWCatalogue(
-                    catalogue_path=Path(catalogue_path),
-                    config_path=Path(config_path),
-                )
-                dataset_metadata = cat.get_dataset_metadata()
-                catalogue_manager.set_dataset_metadata(dataset_metadata)
-                print(f"Loaded dataset metadata from: {config_path}")
-                print(f"  Datasets found: {list(dataset_metadata.keys())}")
-            except Exception as e:
-                print(f"Warning: Could not load dataset metadata: {e}")
+                    # ✅ Replicated logic from catalogue.py (no heavy imports!)
+                    reference_listings = config_data.get("paths", {}).get(
+                        "reference_listings", {}
+                    )
+
+                    dataset_metadata = {}
+                    for dataset_name, dataset_info in reference_listings.items():
+                        if not isinstance(dataset_info, dict):
+                            continue
+
+                        if "path" in dataset_info:
+                            dataset_metadata[dataset_name] = {
+                                "description": dataset_info.get("description", ""),
+                                "category": dataset_info.get("category", "undefined"),
+                                "type": dataset_info.get("type", ""),
+                            }
+
+                    catalogue_manager.set_dataset_metadata(dataset_metadata)
+
+                    print(f"Loaded dataset metadata from: {config_path}")
+                    print(f"  Datasets found: {list(dataset_metadata.keys())}")
+                except Exception as e:
+                    print(f"Warning: Could not load dataset metadata: {e}")
+            else:
+                print("Warning: Config path not set. Dataset metadata unavailable.")
         else:
-            print("Warning: S1IW_CONFIG_PATH not set. Dataset metadata unavailable.")
-    else:
-        print("Warning: S1IW_CATALOGUE_PATH not set. Use --catalogue flag.")
+            print("Warning: Catalogue path not set.")
 
-    yield
+        yield
 
-    catalogue_manager.clear()
-    print("Catalogue unloaded")
+        catalogue_manager.clear()
+        print("Catalogue unloaded")
 
+    app = FastAPI(
+        title="s1iw_catalogue API",
+        description="API for exploring Sentinel-1 IW catalogues",
+        version="0.1.0",
+        lifespan=lifespan,
+    )
 
-# Create FastAPI app
-app = FastAPI(
-    title="s1iw_catalogue API",
-    description="API for exploring Sentinel-1 IW catalogues",
-    version="0.1.0",
-    lifespan=lifespan,
-)
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=["*"],
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
 
-# Configure CORS
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+    templates = get_templates()
 
-# Set up templates
-templates = get_templates()
+    # Use Path(__file__) for reliable static file mounting
+    BASE_DIR = Path(__file__).parent
+    static_dir = BASE_DIR / "static"
+    app.mount("/static", StaticFiles(directory=static_dir), name="static")
 
-# Mount static files
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-static_dir = os.path.join(BASE_DIR, "static")
-app.mount("/static", StaticFiles(directory=static_dir), name="static")
+    app.include_router(stats.router, prefix="/api/stats", tags=["stats"])
+    app.include_router(browse.router, prefix="/api/browse", tags=["browse"])
 
-# Register API routes
-app.include_router(stats.router, prefix="/api/stats", tags=["stats"])
-app.include_router(browse.router, prefix="/api/browse", tags=["browse"])
+    @app.get("/")
+    async def home(request: Request):
+        """Home page with global statistics."""
+        return templates.TemplateResponse("index.html", {"request": request})
 
+    @app.get("/browse")
+    async def browse_page(request: Request):
+        """Browse page with filters and visualizations."""
+        return templates.TemplateResponse("browse.html", {"request": request})
 
-@app.get("/")
-async def home(request: Request):
-    """Home page with global statistics."""
-    return templates.TemplateResponse("index.html", {"request": request})
+    @app.get("/api/health")
+    async def health():
+        """Health check endpoint."""
+        return {
+            "status": "healthy",
+            "catalogue_loaded": catalogue_manager.is_loaded(),
+            "catalogue_path": (
+                str(catalogue_manager.path) if catalogue_manager.path else None
+            ),
+            "row_count": catalogue_manager.row_count(),
+            "dataset_metadata_loaded": catalogue_manager.has_dataset_metadata(),
+            "dataset_count": len(catalogue_manager.get_dataset_metadata() or {}),
+        }
 
-
-@app.get("/browse")
-async def browse_page(request: Request):
-    """Browse page with filters and visualizations."""
-    return templates.TemplateResponse("browse.html", {"request": request})
-
-
-@app.get("/api/health")
-async def health():
-    """Health check endpoint."""
-    return {
-        "status": "healthy",
-        "catalogue_loaded": catalogue_manager.is_loaded(),
-        "catalogue_path": (
-            str(catalogue_manager.path) if catalogue_manager.path else None
-        ),
-        "row_count": catalogue_manager.row_count(),
-        "dataset_metadata_loaded": catalogue_manager.has_dataset_metadata(),
-        "dataset_count": len(catalogue_manager.get_dataset_metadata() or {}),
-    }
+    return app

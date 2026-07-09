@@ -25,22 +25,22 @@ classifiers = [
 ]
 requires-python = ">=3.11"
 
-# ✅ REMOVED s1ifr from here - it's only needed for catalogue creation
+# ✅ LIGHTWEIGHT: Only what the core objects need (like reading a parquet)
 dependencies = [
   "polars",
-  "scipy",
-  "click",
-  "pyyaml",
+  "scipy",    # Kept here because web uses gaussian_kde for heatmaps
+  "click",    # Kept here because both CLIs use it
+  "pyyaml",   # Kept here because web parses the config directly
+]
+
+[project.optional-dependencies]
+# ✅ HEAVY: All tools needed to CREATE the catalogue
+catalogue = [
+  "s1ifr",
   "cdsodatacli",
   "xarray",
   "joblib",
   "tqdm",
-]
-
-[project.optional-dependencies]
-# ✅ NEW: s1ifr only for catalogue creation
-catalogue = [
-  "s1ifr",
 ]
 
 web = [
@@ -70,7 +70,8 @@ dev = [
   "coverage-badge",
   "pytest-html",
   "pytest-cov",
-  "s1iw_catalogue[catalogue]",  # ✅ Include catalogue extras in dev
+  "pytest-asyncio",
+  "s1iw_catalogue[catalogue,web]",  # Dev gets everything
 ]
 
 [project.scripts]

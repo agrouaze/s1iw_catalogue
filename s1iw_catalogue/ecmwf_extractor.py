@@ -6,7 +6,7 @@ Handles two distinct archives: Primary (0.1°, hourly) and Fallback (0.125°, 3-
 
 from __future__ import annotations
 
-from typing import Any, Union
+from typing import Any
 
 import logging
 import os
@@ -39,7 +39,7 @@ def timing_decorator(func: Any) -> Any:
         result = func(*args, **kwargs)
         elapsed = time.time() - start_time
         if elapsed > 0.01:
-            logger.debug(f"⏱️ {func.__name__} took {elapsed:.3f}s")
+            logger.debug("⏱️ %s took %.3fs", func.__name__, elapsed)
         return result
 
     return wrapper
@@ -70,9 +70,21 @@ except ImportError:
 
 
 class ECMWFExtractor:
-    """Extract ECMWF 10m wind data with numpy array access."""
+    """
+    Extract ECMWF 10m wind data with numpy array access.
+
+    Handles two distinct archives:
+    - Primary: 0.1°, hourly data
+    - Fallback: 0.125°, 3-hourly data
+    """
 
     def __init__(self, config_path: str | None = None) -> None:
+        """
+        Initialize the ECMWF extractor.
+
+        Args:
+            config_path: Path to the configuration file
+        """
         self.config = load_config(config_path)
         ecmwf_config = self.config.get("ecmwf", {})
 
@@ -128,7 +140,7 @@ class ECMWFExtractor:
         if os.path.exists(filepath):
             return filepath, is_fallback
 
-        logger.warning(f"ECMWF file not found: {filepath}")
+        logger.warning("ECMWF file not found: %s", filepath)
         return None, is_fallback
 
     @timing_decorator
@@ -186,10 +198,9 @@ class ECMWFExtractor:
             return self._cache[filepath]
 
         self._cache_misses += 1
-        logger.debug(f"  Loading {os.path.basename(filepath)} into memory...")
+        logger.debug("  Loading %s into memory...", os.path.basename(filepath))
 
         try:
-            # ds = xr.open_dataset(filepath, engine="h5netcdf")
             # Do not force h5netcdf: the netcdf4 engine is much more robust
             # for ECMWF formats and avoids "file signature not found" errors
             # on network filesystems (Lustre/NFS) or classic NetCDF4 files.
@@ -247,7 +258,7 @@ class ECMWFExtractor:
             return cache_entry
 
         except Exception as e:
-            logger.error(f"Failed to load {filepath}: {e}")
+            logger.error("Failed to load %s: %s", filepath, e)
             return None
 
     @timing_decorator
@@ -312,7 +323,7 @@ class ECMWFExtractor:
 
         # Batch KDTree query
         centroids_array = np.array(centroids)
-        distances, indices_kd = tree.query(centroids_array, k=1)
+        _, indices_kd = tree.query(centroids_array, k=1)
 
         # Convert to lat/lon indices
         ilats, ilons = np.unravel_index(indices_kd, lon_grid.shape)
@@ -341,6 +352,95 @@ class ECMWFExtractor:
             }
 
         return results
+
+    def _process_group(
+        self,
+        group_info: dict[str, Any],
+        df_with_info: pd.DataFrame,
+        geom_col: str,
+        time_col: str,
+    ) -> dict[int, dict[str, float]]:
+        """Process a single file for a group of indices."""
+        indices = group_info["indices"]
+        is_fb = group_info["is_fallback"]
+
+        cache_entry = self._load_ecmwf_data(str(group_info["__key__"]), is_fb)
+        if cache_entry is None:
+            return {
+                idx: {col: np.nan for col in self.output_columns} for idx in indices
+            }
+
+        return self._extract_values_batch(
+            cache_entry, indices, df_with_info, geom_col, time_col
+        )
+
+    def _get_time_column(self, catalogue_df: pd.DataFrame) -> str:
+        """Get the time column name from the catalogue."""
+        time_col = (
+            "start date SAFE"
+            if "start date SAFE" in catalogue_df.columns
+            else "start_date"
+        )
+        if time_col not in catalogue_df.columns:
+            raise ValueError("Missing time column")
+        return time_col
+
+    def _get_geometry_column(self, catalogue_df: pd.DataFrame) -> str:
+        """Get the geometry column name from the catalogue."""
+        geom_col = next(
+            (
+                col
+                for col in ["polygon SLC", "polygon GRD", "geometry"]
+                if col in catalogue_df.columns
+            ),
+            None,
+        )
+        if geom_col is None:
+            raise ValueError("No geometry column found")
+        return geom_col
+
+    def _resolve_paths(self, catalogue_df: pd.DataFrame, time_col: str) -> pd.DataFrame:
+        """Resolve file paths for each row."""
+        df_with_info = catalogue_df.copy()
+
+        for idx, row in df_with_info.iterrows():
+            try:
+                dt = pd.to_datetime(row[time_col])
+                filepath, is_fb = self.get_file_path(dt)
+                df_with_info.at[idx, "_ecmwf_path"] = filepath
+                df_with_info.at[idx, "_ecmwf_is_fallback"] = is_fb
+            except Exception:
+                df_with_info.at[idx, "_ecmwf_path"] = None
+                df_with_info.at[idx, "_ecmwf_is_fallback"] = False
+
+        return df_with_info
+
+    def _group_by_file_path(
+        self, df_with_info: pd.DataFrame, catalogue_df: pd.DataFrame
+    ) -> tuple[dict[str, dict[str, Any]], list[dict[str, Any]]]:
+        """Group indices by file path."""
+        groups: dict[str, dict[str, Any]] = {}
+
+        for idx, row in df_with_info.iterrows():
+            key = row["_ecmwf_path"]
+            if key is None:
+                self._diagnostics["file_not_found"] += 1
+                # Populate NaN for missing files directly
+                for col in self.output_columns:
+                    catalogue_df.at[idx, col] = np.nan
+                continue
+
+            if key not in groups:
+                groups[key] = {
+                    "is_fallback": row["_ecmwf_is_fallback"],
+                    "indices": [],
+                }
+            groups[key]["indices"].append(idx)
+
+        # Inject key for the closure
+        group_list = [{"__key__": k, **v} for k, v in groups.items()]
+
+        return groups, group_list
 
     @timing_decorator
     def extract_batch(
@@ -378,83 +478,26 @@ class ECMWFExtractor:
         if n_jobs is None:
             n_jobs = self.default_n_jobs
 
-        time_col = (
-            "start date SAFE"
-            if "start date SAFE" in catalogue_df.columns
-            else "start_date"
-        )
-        if time_col not in catalogue_df.columns:
-            raise ValueError("Missing time column")
-
-        geom_col = next(
-            (
-                col
-                for col in ["polygon SLC", "polygon GRD", "geometry"]
-                if col in catalogue_df.columns
-            ),
-            None,
-        )
-        if geom_col is None:
-            raise ValueError("No geometry column found")
+        time_col = self._get_time_column(catalogue_df)
+        geom_col = self._get_geometry_column(catalogue_df)
 
         # Resolve file paths for each row
-        def resolve_path(row: pd.Series) -> pd.Series:
-            try:
-                dt = pd.to_datetime(row[time_col])
-                filepath, is_fb = self.get_file_path(dt)
-                row["_ecmwf_path"] = filepath
-                row["_ecmwf_is_fallback"] = is_fb
-            except Exception:
-                row["_ecmwf_path"] = None
-                row["_ecmwf_is_fallback"] = False
-            return row
-
         if verbose:
-            logger.info(f"🌬️ Resolving ECMWF paths for {len(catalogue_df)} products...")
-        df_with_info = catalogue_df.apply(resolve_path, axis=1)
+            logger.info(
+                "🌬️ Resolving ECMWF paths for %d products...", len(catalogue_df)
+            )
+        df_with_info = self._resolve_paths(catalogue_df, time_col)
 
         # Group by file path for efficient batch loading
-        groups: dict[str, dict[str, Any]] = {}
-        for idx, row in df_with_info.iterrows():
-            key = row["_ecmwf_path"]
-            if key is None:
-                self._diagnostics["file_not_found"] += 1
-                # Populate NaN for missing files directly
-                for col in self.output_columns:
-                    catalogue_df.loc[idx, col] = np.nan
-                continue
-
-            if key not in groups:
-                groups[key] = {
-                    "is_fallback": row["_ecmwf_is_fallback"],
-                    "indices": [],
-                }
-            groups[key]["indices"].append(idx)
+        _, group_list = self._group_by_file_path(df_with_info, catalogue_df)
 
         if verbose:
-            logger.info(f"📊 Processing {len(groups)} ECMWF files...")
+            logger.info("📊 Processing %d ECMWF files...", len(group_list))
 
-        def process_group(group_info: dict[str, Any]) -> dict[int, dict[str, float]]:
-            """Process a single file for a group of indices."""
-            indices = group_info["indices"]
-            is_fb = group_info["is_fallback"]
-
-            cache_entry = self._load_ecmwf_data(str(group_info["__key__"]), is_fb)
-            if cache_entry is None:
-                return {
-                    idx: {col: np.nan for col in self.output_columns} for idx in indices
-                }
-
-            return self._extract_values_batch(
-                cache_entry, indices, df_with_info, geom_col, time_col
-            )
-
-        # Process groups (inject key for the closure)
-        group_list = [{"__key__": k, **v} for k, v in groups.items()]
-
+        # Process groups in parallel
         if n_jobs > 1 and len(group_list) > 0:
             all_results = Parallel(n_jobs=n_jobs, verbose=0)(
-                delayed(process_group)(info)
+                delayed(self._process_group)(info, df_with_info, geom_col, time_col)
                 for info in tqdm(
                     group_list, desc="Processing ECMWF", disable=not verbose
                 )
@@ -462,20 +505,22 @@ class ECMWFExtractor:
         else:
             all_results = []
             for info in tqdm(group_list, desc="Processing ECMWF", disable=not verbose):
-                all_results.append(process_group(info))
+                all_results.append(
+                    self._process_group(info, df_with_info, geom_col, time_col)
+                )
 
         # Merge results back to DataFrame
         for result_dict in all_results:
             for idx, vals in result_dict.items():
                 for col, val in vals.items():
-                    catalogue_df.loc[idx, col] = val
+                    catalogue_df.at[idx, col] = val
 
         if verbose:
             logger.info(
-                f"🏁 ECMWF extraction total time: {time.time() - total_start:.3f}s"
+                "🏁 ECMWF extraction total time: %.3fs", time.time() - total_start
             )
             logger.info(
-                f"   Cache: hits={self._cache_hits}, misses={self._cache_misses}"
+                "   Cache: hits=%d, misses=%d", self._cache_hits, self._cache_misses
             )
 
         if is_polars:

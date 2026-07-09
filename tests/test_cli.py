@@ -199,12 +199,14 @@ class TestStatsCommand:
         with runner.isolated_filesystem():
             Path("dummy.parquet").touch()
             result = runner.invoke(
-                main, ["stats", "--catalogue", "dummy.parquet", "--dataset", "missing_ds"]
+                main,
+                ["stats", "--catalogue", "dummy.parquet", "--dataset", "missing_ds"],
             )
 
         assert result.exit_code == 0
-        assert "products found for dataset" in result.output.lower()  # Fixed case-sensitivity
-
+        assert (
+            "products found for dataset" in result.output.lower()
+        )  # Fixed case-sensitivity
 
 
 class TestBackupCommand:

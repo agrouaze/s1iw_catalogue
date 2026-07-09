@@ -19,7 +19,7 @@ logging.basicConfig(
 # =============================================================================
 # MAIN GROUP
 # =============================================================================
-@click.group()
+@click.group(context_settings={"help_option_names": ["-h", "--help"]})
 @click.option(
     "--config", "-c", type=click.Path(exists=True), help="Path to configuration file."
 )
@@ -258,6 +258,7 @@ def serve(
     # Set debug logging if requested
     if debug:
         import logging
+
         logging.getLogger("s1iw_catalogue").setLevel(logging.DEBUG)
         logging.getLogger("s1iw_catalogue.web").setLevel(logging.DEBUG)
         logging.getLogger("s1iw_catalogue.catalogue").setLevel(logging.DEBUG)
