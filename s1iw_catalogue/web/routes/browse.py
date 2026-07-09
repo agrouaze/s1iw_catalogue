@@ -1,9 +1,8 @@
 """Browse API routes for filtering and exploring catalogue content."""
 
-from typing import Any, List, Optional
+from typing import Any
 
 import logging
-import traceback
 
 import numpy as np
 import polars as pl
