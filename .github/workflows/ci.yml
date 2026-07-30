@@ -34,7 +34,7 @@ jobs:
           S1IFR_PYPI_TOKEN: ${{ secrets.S1IFR_PYPI_TOKEN }}  # <--- CHANGED
         run: uv pip install s1ifr --index-url https://__token__${S1IFR_PYPI_TOKEN}@gitlab.ifremer.fr/api/v4/projects/4991/packages/pypi/simple  # <--- CHANGED (extra-index-url -> index-url)
 
-      - uses: j178/prek-action@v2
+      - uses: j178/prek-action@v2.0.6
 
       - name: Run Pylint
         run: uvx nox -s pylint -- --output-format=github
